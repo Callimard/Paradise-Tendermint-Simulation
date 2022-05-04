@@ -1,0 +1,884 @@
+package org.paradise.simulation.tendermint;
+
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import org.paradise.palmbeach.basic.messaging.Message;
+import org.paradise.palmbeach.basic.messaging.MessageReceiver;
+import org.paradise.palmbeach.basic.messaging.broadcasting.Broadcaster;
+import org.paradise.palmbeach.blockchain.block.Block;
+import org.paradise.palmbeach.blockchain.block.Blockchain;
+import org.paradise.palmbeach.blockchain.block.NonForkBlockchain;
+import org.paradise.palmbeach.blockchain.transaction.MoneyTx;
+import org.paradise.palmbeach.core.agent.SimpleAgent;
+import org.paradise.palmbeach.core.agent.exception.AgentNotStartedException;
+import org.paradise.palmbeach.core.agent.protocol.Protocol;
+import org.paradise.palmbeach.core.environment.network.Network;
+import org.paradise.palmbeach.core.event.Event;
+import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
+import org.paradise.palmbeach.utils.context.Context;
+
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import static org.paradise.palmbeach.core.simulation.PalmBeachSimulation.scheduleEvent;
+import static org.paradise.palmbeach.utils.validation.Validate.min;
+
+@Slf4j
+public class Tendermint extends Protocol implements MessageReceiver.MessageReceiverObserver {
+    // Context.
+
+    public static final String BLOCKCHAIN = "bc";
+
+    public static final String MAX_HEIGHT = "maxHeight";
+    public static final long DEFAULT_MAX_HEIGHT = 100;
+
+    // Variables.
+
+    private final Random random = new Random();
+
+    private Broadcaster broadcaster;
+
+    private long height = 1L;
+    private long round = 0L;
+    private Step step = Step.PROPOSE;
+    private final Blockchain<MoneyTx> decision;
+    private Block<MoneyTx> lockedValue;
+    private long lockRound = -1;
+    private Block<MoneyTx> validValue;
+    private long validRound = -1;
+
+    private long timeoutPropose;
+    private long timeoutPrevote;
+    private long timeoutPrecommit;
+    private long deltaTimeout;
+
+    private final Set<Proposal> proposalReceived = Sets.newHashSet();
+    private final Map<Stage, Set<SimpleAgent.AgentIdentifier>> prevoteReceived = Maps.newHashMap();
+    private final Map<Prevote, Long> prevoteCounter = Maps.newHashMap();
+    private final Map<Stage, Set<SimpleAgent.AgentIdentifier>> precommitReceived = Maps.newHashMap();
+    private final Map<Precommit, Long> precommitCounter = Maps.newHashMap();
+
+    private final Map<Rule, Set<Stage>> ruleAlreadyExecuted = Maps.newHashMap();
+
+    @Setter
+    @NonNull
+    private Network network;
+
+    private final Set<Rule> rules = Sets.newHashSet(new ProposalForRound(), new ProposalAndPrevoteForValidRound(), new PrevoteForRound(),
+                                                    new ProposalAndPrevoteForRound(), new PrevoteNilForRound(), new PrecommitForRound(),
+                                                    new ProposalAndPrecommitForRound(), new ChangeRound());
+
+    // Constructors.
+
+    public Tendermint(@NonNull SimpleAgent agent, Context context) {
+        super(agent, context);
+        this.decision = new NonForkBlockchain<>(new Block<>(Block.GENESIS_BLOCK_HEIGHT, Block.GENESIS_BLOCK_TIMESTAMP, Block.GENESIS_BLOCK_PREVIOUS,
+                                                            Sets.newHashSet()));
+        initTimeout();
+        getContext().map(BLOCKCHAIN, this.decision);
+    }
+
+    // Methods.
+
+    private void initTimeout() {
+        timeoutPropose = 25L;
+        timeoutPrevote = 25L;
+        timeoutPrecommit = 25L;
+        deltaTimeout = 10L;
+    }
+
+    private void startRound(long r) {
+        if (height == maxHeight()) {
+            log.debug("{} STOPPED -> height >= 15 reached", getAgent().getIdentifier());
+            getAgent().stop();
+        }
+
+        if (getAgent().isStarted()) {
+            log.info("{} start new round {} -> Stage({}, {})", getAgent().getIdentifier(), round, height, round);
+
+            round = r;
+            step = Step.PROPOSE;
+            Block<MoneyTx> proposal;
+            if (isProposer(getAgent().getIdentifier(), height, round)) {
+                proposal = Objects.requireNonNullElseGet(validValue, this::nextValue);
+                log.info("{} proposer for Stage({}, {}), proposal hash -> {}", getAgent().getIdentifier(), height, round,
+                         proposal.sha256Base64Hash());
+                broadcastProposal(height, round, proposal, validRound);
+            } else {
+                scheduleTimeoutPropose(height, round);
+            }
+        } else
+            throw new AgentNotStartedException(getAgent().getIdentifier() + " is not started -> cannot start round " + r);
+    }
+
+    private boolean isProposer(SimpleAgent.AgentIdentifier agent, long h, long r) {
+        return proposer(h, r).equals(agent);
+    }
+
+    private SimpleAgent.AgentIdentifier proposer(long h, long r) {
+        List<SimpleAgent.AgentIdentifier> members = Lists.newArrayList(groupMembership());
+        int index = (int) ((((members.size() + h) % members.size()) + r) % members.size());
+        return members.get(index);
+    }
+
+    private Block<MoneyTx> nextValue() {
+        final long h = height;
+        final long timestamp = PalmBeachSimulation.scheduler().getCurrentTime();
+        final String previous = decision.getBlock(height - 1).sha256Base64Hash();
+        final Set<MoneyTx> tx = Sets.newHashSet();
+        for (int i = 0; i < random.nextInt(1, 101); i++) {
+            byte[] array = new byte[3];
+            random.nextBytes(array);
+            String sender = new String(array, StandardCharsets.UTF_8);
+            random.nextBytes(array);
+            String receiver = new String(array, StandardCharsets.UTF_8);
+            tx.add(new MoneyTx(timestamp, sender, receiver, random.nextLong(Long.MAX_VALUE)));
+        }
+
+        return new Block<>(h, timestamp, previous, tx);
+    }
+
+    private void scheduleTimeoutPropose(long h, long r) {
+        scheduleEvent(getAgent(), new TimeoutProposeEvent(new Stage(h, r)), timeoutPropose);
+    }
+
+    @Override
+    protected ProtocolManipulator defaultProtocolManipulator() {
+        return new DefaultProtocolManipulator(this);
+    }
+
+    @Override
+    public void agentStarted() {
+        startRound(0L);
+    }
+
+    @Override
+    public void agentStopped() {
+        // Nothing.
+    }
+
+    @Override
+    public void agentKilled() {
+        // Nothing.
+    }
+
+    @Override
+    public void processEvent(Event<?> event) {
+        if (getAgent().isStarted()) {
+            TimeoutEvent timeoutEvent = (TimeoutEvent) event;
+            timeoutEvent.onTimeout();
+        } else
+            throw new AgentNotStartedException(getAgent().getIdentifier() + " is not started -> cannot processEvent " + event);
+    }
+
+    @Override
+    public boolean canProcessEvent(Event<?> event) {
+        return event instanceof TimeoutEvent;
+    }
+
+    @Override
+    public void messageDelivery(@NonNull MessageReceiver messageReceiver, Object contentDelivered) {
+        if (getAgent().isStarted()) {
+            if (contentDelivered instanceof ProposalMessage proMsg) {
+                treatsProposalMessage(proMsg);
+            } else if (contentDelivered instanceof PrevoteMessage preMsg) {
+                treatsPrevoteMessage(preMsg);
+            } else if (contentDelivered instanceof PrecommitMessage preComMsg) {
+                treatsPrecommitMessage(preComMsg);
+            } else {
+                log.error("Agent {} in Tendermint receive a object which is not a TendermintMessage -> Object receive {}",
+                          getAgent().getIdentifier(), contentDelivered);
+            }
+        } else
+            throw new AgentNotStartedException(getAgent().getIdentifier() + " is not started -> cannot delivered content " + contentDelivered);
+    }
+
+    private void treatsProposalMessage(ProposalMessage proMsg) {
+        if (isProposer(proMsg.getSender(), height, round) && !proposalReceived.contains(proMsg.getProposal())) {
+            proposalReceived.add(proMsg.getProposal());
+            executeRules(proMsg);
+        }
+    }
+
+    private void treatsPrevoteMessage(PrevoteMessage preMsg) {
+        Set<SimpleAgent.AgentIdentifier> agentSendPrevote = prevoteReceived.computeIfAbsent(preMsg.getStage(), k -> Sets.newHashSet());
+        if (agentSendPrevote.add(preMsg.getSender())) {
+            Prevote prevote = preMsg.getPrevote();
+            long counter = prevoteCounter.computeIfAbsent(prevote, k -> 0L);
+            prevoteCounter.put(prevote, counter + 1);
+            executeRules(preMsg);
+        }
+    }
+
+    private void treatsPrecommitMessage(PrecommitMessage preComMsg) {
+        Set<SimpleAgent.AgentIdentifier> agentSendPrecommit = precommitReceived.computeIfAbsent(preComMsg.getStage(), k -> Sets.newHashSet());
+        if (agentSendPrecommit.add(preComMsg.getSender())) {
+            Precommit precommit = preComMsg.getPrecommit();
+            long counter = precommitCounter.computeIfAbsent(precommit, k -> 0L);
+            precommitCounter.put(precommit, counter + 1);
+            executeRules(preComMsg);
+        }
+    }
+
+    private void executeRules(TendermintMessage<?> tMsg) {
+        for (Rule rule : rules) {
+            if (!rule.isOnlyOneTimeRule()) {
+                rule.execute(tMsg);
+            } else {
+                boolean evaluation = rule.evaluateCondition(tMsg);
+                if (evaluation) {
+                    Set<Stage> stages = ruleAlreadyExecuted.computeIfAbsent(rule, r -> Sets.newHashSet());
+                    if (stages.add(new Stage(height, round))) {
+                        rule.execute(tMsg);
+                    }
+                }
+            }
+        }
+    }
+
+    private void broadcastProposal(long h, long r, Block<MoneyTx> proposal, long vR) {
+        broadcaster.broadcastMessage(new ProposalMessage(getAgent().getIdentifier(), h, r, proposal, vR), groupMembership(), network);
+    }
+
+    private void broadcastPrevote(long h, long r, String value) {
+        broadcaster.broadcastMessage(new PrevoteMessage(getAgent().getIdentifier(), h, r, value), groupMembership(), network);
+    }
+
+    private void broadcastPrecommit(long h, long r, String value) {
+        broadcaster.broadcastMessage(new PrecommitMessage(getAgent().getIdentifier(), h, r, value), groupMembership(), network);
+    }
+
+    @Override
+    public boolean interestedBy(Object contentDelivered) {
+        return contentDelivered instanceof TendermintMessage;
+    }
+
+    private boolean isValid(Block<MoneyTx> block, long h) {
+        return block != null && block.getHeight() == h;
+    }
+
+    // Getters and Setters.
+
+    public void setBroadcaster(Broadcaster broadcaster) {
+        this.broadcaster = broadcaster;
+        this.broadcaster.addObserver(this);
+    }
+
+    public Set<SimpleAgent.AgentIdentifier> groupMembership() {
+        return network.getEnvironment().evolvingAgents();
+    }
+
+    public long f() {
+        Set<SimpleAgent.AgentIdentifier> members = groupMembership();
+        long f = members.size() / 3;
+        if (3 * f == members.size())
+            f -= 1;
+        return f;
+    }
+
+    public long maxHeight() {
+        if (getContext().getValue(MAX_HEIGHT) != null) {
+            long maxHeight = getContext().getLong(MAX_HEIGHT);
+            min(maxHeight, 5, "MaxHeight must be greater or equal to 5");
+            return maxHeight;
+        } else {
+            return DEFAULT_MAX_HEIGHT;
+        }
+    }
+
+    public void maxHeight(long maxHeight) {
+        min(maxHeight, 5, "MaxHeight must be greater or equal to 5");
+        getContext().setLong(MAX_HEIGHT, maxHeight);
+    }
+
+    // Inner classes.
+
+    public enum Step {
+        PROPOSE, PREVOTE, PRECOMMIT
+    }
+
+    public record Stage(long h, long r) {
+    }
+
+    private abstract class Rule {
+
+        // Methods.
+
+        public abstract boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg);
+
+        public final void execute(@NonNull TendermintMessage<?> tMsg) {
+            if (evaluateCondition(tMsg)) {
+                execution(tMsg);
+            }
+        }
+
+        protected abstract void execution(@NonNull TendermintMessage<?> tMsg);
+
+        public abstract boolean isOnlyOneTimeRule();
+
+        public long numberPrevoteFor(long h, long r) {
+            Set<Prevote> matchingPrevote = prevoteCounter.keySet()
+                    .stream().filter(prevote -> prevote.h() == h && prevote.r() == r)
+                    .collect(Collectors.toSet());
+            long count = 0L;
+            for (Prevote prevote : matchingPrevote) {
+                long counter = prevoteCounter.get(prevote);
+                count += counter;
+            }
+
+            return count;
+        }
+
+        public long numberPrecommitFor(long h, long r) {
+            Set<Precommit> matchingPrecommit = precommitCounter.keySet().stream()
+                    .filter(precommit -> precommit.h() == h && precommit.r() == r)
+                    .collect(Collectors.toSet());
+
+            long count = 0L;
+            for (Precommit precommit : matchingPrecommit) {
+                long counter = precommitCounter.get(precommit);
+                count += counter;
+            }
+
+            return count;
+        }
+
+        public long numberMessageFor(long h, long r) {
+            Set<Proposal> matchingProposal = proposalReceived.stream().filter(proposal -> proposal.h() == h && proposal.r() == r)
+                    .collect(Collectors.toSet());
+            long numberMatchingPrevote = numberPrevoteFor(h, r);
+            long numberMatchingPrecommit = numberPrecommitFor(h, r);
+
+            return matchingProposal.size() + numberMatchingPrevote + numberMatchingPrecommit;
+        }
+
+        public Proposal findProposal(long h, long r) {
+            for (Proposal proposal : proposalReceived) {
+                if (proposal.h() == h && proposal.r() == r) {
+                    return proposal;
+                }
+            }
+
+            return null;
+        }
+
+        public Proposal findProposalByValidRound(long h, long vR) {
+            for (Proposal proposal : proposalReceived) {
+                if (proposal.h() == h && proposal.vR() == vR) {
+                    return proposal;
+                }
+            }
+
+            return null;
+        }
+    }
+
+    private class ProposalForRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            if (tMsg instanceof ProposalMessage proMsg) {
+                final long r = proMsg.getRound();
+                final long vR = proMsg.getValidRound();
+
+                return step == Step.PROPOSE
+                        && isProposer(proMsg.getSender(), height, round)
+                        && height == proMsg.getHeight()
+                        && r == round
+                        && vR == -1;
+            } else {
+                return false;
+            }
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            if (tMsg instanceof ProposalMessage proMsg) {
+                final Block<MoneyTx> v = proMsg.getValue();
+                log.debug("{} Execute ProposalForRound -> v {}, h {}, lockRound {}, lockedValue == v {}, isValid(v, height) {}",
+                          getAgent().getIdentifier(), v.sha256Base64Hash(), height, lockRound, Objects.equals(lockedValue, v), isValid(v, height));
+                if (isValid(v, height) && (lockRound == -1 || Objects.equals(lockedValue, v))) {
+                    log.debug("{} Prevote v {}", getAgent().getIdentifier(), v.sha256Base64Hash());
+                    broadcastPrevote(height, round, v.sha256Base64Hash());
+                } else {
+                    log.debug("{} Prevote NIL", getAgent().getIdentifier());
+                    broadcastPrevote(height, round, null);
+                }
+                step = Step.PREVOTE;
+            }
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return false;
+        }
+    }
+
+    private class PrevoteForRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            if (tMsg instanceof PrevoteMessage preMsg) {
+                return height == preMsg.getHeight()
+                        && round == preMsg.getRound()
+                        && step == Step.PREVOTE
+                        && numberPrevoteFor(height, round) >= (2 * f() + 1);
+            } else
+                return false;
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            scheduleTimeoutPrevote(height, round);
+        }
+
+        private void scheduleTimeoutPrevote(long h, long r) {
+            log.debug("{} schedule TimeoutPrevote, Stage({}, {})", getAgent().getIdentifier(), height, round);
+            scheduleEvent(getAgent(), new TimeoutPrevoteEvent(new Stage(h, r)), timeoutPrevote);
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return true;
+        }
+    }
+
+    private class PrevoteNilForRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            if (tMsg instanceof PrevoteMessage preMsg) {
+                final long h = preMsg.getHeight();
+                final long r = preMsg.getRound();
+                final String idV = preMsg.getValue();
+                final Prevote prevote = new Prevote(height, round, idV);
+
+                return step == Step.PREVOTE
+                        && height == h
+                        && round == r
+                        && idV == null
+                        && (prevoteCounter.containsKey(prevote) && prevoteCounter.get(prevote) >= (2 * f() + 1));
+            } else
+                return false;
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            broadcastPrecommit(height, round, null);
+            step = Step.PRECOMMIT;
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return false;
+        }
+    }
+
+    private class PrecommitForRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            if (tMsg instanceof PrecommitMessage preCoMsg) {
+                boolean evaluation = height == preCoMsg.getHeight()
+                        && round == preCoMsg.getRound()
+                        && numberPrecommitFor(height, round) >= (2 * f() + 1);
+                log.debug("{} evaluate PrecommitForRound, tMsg.stage = {}, evaluation = {}, nbPrecommit = {}, 2 * f + 1= {}",
+                          getAgent().getIdentifier(),
+                          tMsg.getStage(), evaluation, numberPrecommitFor(height, round), (2 * f() + 1));
+                return evaluation;
+            } else
+                return false;
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            log.debug("{} scheduleTimeoutPrecommit Stag({}, {})", getAgent().getIdentifier(), height, round);
+            scheduleTimeoutPrecommit(height, round);
+        }
+
+        private void scheduleTimeoutPrecommit(long h, long r) {
+            scheduleEvent(getAgent(), new TimeoutPrecommitEvent(new Stage(h, r)), timeoutPrecommit);
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return true;
+        }
+    }
+
+    private class ChangeRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            return height == tMsg.getHeight()
+                    && round < tMsg.getRound()
+                    && numberMessageFor(height, tMsg.getRound()) >= (f() + 1);
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            startRound(tMsg.round);
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return false;
+        }
+    }
+
+    private class ProposalAndPrevoteForValidRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            Proposal proposal;
+            Prevote prevote;
+
+            if (tMsg instanceof ProposalMessage proMsg) {
+                proposal = proMsg.getProposal();
+                prevote = new Prevote(proposal.h(), proposal.vR(), proposal.proposal().sha256Base64Hash());
+            } else if (tMsg instanceof PrevoteMessage preMsg) {
+                prevote = preMsg.getPrevote();
+                proposal = findProposalByValidRound(prevote.h(), prevote.r());
+                if (proposal == null || !proposal.proposal().sha256Base64Hash().equals(prevote.idV())) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            final long vR = proposal.vR();
+
+            return step == Step.PROPOSE
+                    && height == proposal.h()
+                    && round == proposal.r()
+                    && (vR >= 0 && vR < round)
+                    && (prevoteCounter.containsKey(prevote) && prevoteCounter.get(prevote) >= (2 * f() + 1));
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            Proposal proposal = findProposal(height, round);
+            final Block<MoneyTx> v = proposal.proposal();
+            final long vR = proposal.vR();
+
+            if (isValid(v, height) && (lockRound <= vR || Objects.equals(lockedValue, v))) {
+                broadcastPrevote(height, round, v.sha256Base64Hash());
+            } else {
+                broadcastPrevote(height, round, null);
+            }
+            step = Step.PREVOTE;
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return false;
+        }
+    }
+
+    private class ProposalAndPrevoteForRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            Proposal proposal;
+            Prevote prevote;
+
+            if (tMsg instanceof ProposalMessage proMsg) {
+                proposal = proMsg.getProposal();
+                prevote = new Prevote(proposal.h(), proposal.r(), proposal.proposal().sha256Base64Hash());
+            } else if (tMsg instanceof PrevoteMessage preMsg) {
+                prevote = preMsg.getPrevote();
+                proposal = findProposal(prevote.h(), prevote.r());
+                log.debug("{} ProposalAndPrevoteForRound by PrevoteMsg, prevote {}, proposal {}", getAgent().getIdentifier(), prevote,
+                          proposal != null ? proposal.proposal().sha256Base64Hash() : null);
+                if (proposal == null || !proposal.proposal().sha256Base64Hash().equals(prevote.idV())) {
+                    log.debug("{} OUT Prevote.idV {}", getAgent().getIdentifier(), prevote.idV());
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            final Block<MoneyTx> v = proposal.proposal();
+
+            log.debug("{} evaluate ProposalAndPrevoteForRound, proposal = {}, prevote = {}, prevoteCounter.containsKey {}",
+                      getAgent().getIdentifier(),
+                      proposal.proposal().sha256Base64Hash(), prevote, prevoteCounter.containsKey(prevote));
+
+            return (step == Step.PREVOTE || step == Step.PRECOMMIT)
+                    && (height == proposal.h() && round == proposal.r())
+                    && isValid(v, height)
+                    && (prevoteCounter.containsKey(prevote) && prevoteCounter.get(prevote) >= (2 * f() + 1));
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            final Block<MoneyTx> v = findProposal(height, round).proposal();
+
+            log.debug("{} receive 2f + 1 Prevote of v = {}", getAgent().getIdentifier(), v.sha256Base64Hash());
+
+            if (step == Step.PREVOTE) {
+                log.debug("{} broadcast Precommit for v = {}", getAgent().getIdentifier(), v.sha256Base64Hash());
+                lockedValue = v;
+                lockRound = round;
+                broadcastPrecommit(height, round, v.sha256Base64Hash());
+                step = Step.PRECOMMIT;
+            }
+            validValue = v;
+            validRound = round;
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return true;
+        }
+    }
+
+    private class ProposalAndPrecommitForRound extends Rule {
+
+        // Methods.
+
+        @Override
+        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+            Proposal proposal;
+            Precommit precommit;
+
+            if (tMsg instanceof ProposalMessage proMsg) {
+                proposal = proMsg.getProposal();
+                precommit = new Precommit(proposal.h(), proposal.r(), proposal.proposal().sha256Base64Hash());
+            } else if (tMsg instanceof PrecommitMessage preCoMsg) {
+                precommit = preCoMsg.getPrecommit();
+                proposal = findProposal(precommit.h(), precommit.r());
+                if (proposal == null || !proposal.proposal().sha256Base64Hash().equals(precommit.idV())) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            return height == proposal.h()
+                    && (precommitCounter.containsKey(precommit) && precommitCounter.get(precommit) >= (2 * f() + 1))
+                    && !decision.hasBlock(height);
+        }
+
+        @Override
+        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+            final Block<MoneyTx> v = findProposal(height, tMsg.round).proposal();
+
+            if (isValid(v, height)) {
+                decision.addBlock(v);
+                height += 1;
+                resetTendermint();
+                startRound(0);
+            }
+        }
+
+        private void resetTendermint() {
+            lockRound = -1;
+            lockedValue = null;
+            validRound = -1;
+            validValue = null;
+        }
+
+        @Override
+        public boolean isOnlyOneTimeRule() {
+            return false;
+        }
+    }
+
+    @EqualsAndHashCode(callSuper = true)
+    private abstract static class TendermintMessage<T> extends Message<T> {
+
+        // Variables.
+
+        @Getter
+        @NonNull
+        private final SimpleAgent.AgentIdentifier sender;
+
+        @Getter
+        private final long height;
+
+        @Getter
+        private final long round;
+
+        // Constructors.
+
+        protected TendermintMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, T value) {
+            super(value);
+            this.sender = sender;
+            this.height = height;
+            this.round = round;
+        }
+
+        // Getters.
+
+        public Stage getStage() {
+            return new Stage(height, round);
+        }
+
+        public T getValue() {
+            return getContent();
+        }
+    }
+
+    @EqualsAndHashCode(callSuper = true)
+    private static class ProposalMessage extends TendermintMessage<Block<MoneyTx>> {
+
+        // Variables.
+
+        @Getter
+        private final long validRound;
+
+        // Constructors.
+
+        public ProposalMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, Block<MoneyTx> proposal, long validRound) {
+            super(sender, height, round, proposal);
+            this.validRound = validRound;
+        }
+
+        // Methods.
+
+        public Proposal getProposal() {
+            return new Proposal(getHeight(), getRound(), getContent(), getValidRound());
+        }
+    }
+
+    private static record Proposal(long h, long r, Block<MoneyTx> proposal, long vR) {
+    }
+
+    @EqualsAndHashCode(callSuper = true)
+    private static class PrevoteMessage extends TendermintMessage<String> {
+
+        // Constructors.
+
+        public PrevoteMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, String value) {
+            super(sender, height, round, value);
+        }
+
+        // Methods.
+
+        public Prevote getPrevote() {
+            return new Prevote(getHeight(), getRound(), getContent());
+        }
+    }
+
+    public static record Prevote(long h, long r, String idV) {
+    }
+
+    @EqualsAndHashCode(callSuper = true)
+    private static class PrecommitMessage extends TendermintMessage<String> {
+
+        // Constructors.
+
+        public PrecommitMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, String value) {
+            super(sender, height, round, value);
+        }
+
+        // Methods.
+
+        public Precommit getPrecommit() {
+            return new Precommit(getHeight(), getRound(), getContent());
+        }
+    }
+
+    public static record Precommit(long h, long r, String idV) {
+    }
+
+    @EqualsAndHashCode(callSuper = true)
+    private abstract static class TimeoutEvent extends Event<Void> {
+
+        @Getter
+        @NonNull
+        private final Stage stage;
+
+        protected TimeoutEvent(@NonNull Stage stage) {
+            super(null);
+            this.stage = stage;
+        }
+
+        public abstract void onTimeout();
+    }
+
+    private class TimeoutProposeEvent extends TimeoutEvent {
+
+        public TimeoutProposeEvent(@NonNull Stage stage) {
+            super(stage);
+        }
+
+        @Override
+        public void onTimeout() {
+            if (height == getStage().h() && round == getStage().r() && step == Step.PROPOSE) {
+                log.debug("{} OnTimeoutPropose, Stage({}, {})", getAgent().getIdentifier(), height, round);
+                increaseTimeoutPropose(round);
+                broadcastPrevote(height, round, null);
+                step = Step.PREVOTE;
+            }
+        }
+
+        private void increaseTimeoutPropose(long r) {
+            timeoutPropose = timeoutPropose + (r * deltaTimeout);
+        }
+    }
+
+    private class TimeoutPrevoteEvent extends TimeoutEvent {
+
+        public TimeoutPrevoteEvent(@NonNull Stage stage) {
+            super(stage);
+        }
+
+        @Override
+        public void onTimeout() {
+            log.debug("In OnTimeoutPrevote");
+            if (height == getStage().h() && round == getStage().r() && step == Step.PREVOTE) {
+                log.debug("{} OnTimeoutPrevote, Stage({}, {})", getAgent().getIdentifier(), height, round);
+                increaseTimeoutPrevote(round);
+                broadcastPrecommit(height, round, null);
+                step = Step.PRECOMMIT;
+            }
+        }
+
+        private void increaseTimeoutPrevote(long r) {
+            timeoutPrevote = timeoutPrevote + (r * deltaTimeout);
+        }
+    }
+
+    private class TimeoutPrecommitEvent extends TimeoutEvent {
+
+        protected TimeoutPrecommitEvent(@NonNull Stage stage) {
+            super(stage);
+        }
+
+        @Override
+        public void onTimeout() {
+            if (height == getStage().h() && round == getStage().r()) {
+                log.debug("{} OnTimeoutPrecommit, Stage({}, {}) -> start new round {}", getAgent().getIdentifier(), height, round, round + 1);
+                increaseTimeoutPrecommit(round);
+                startRound(round + 1);
+            }
+        }
+
+        private void increaseTimeoutPrecommit(long r) {
+            timeoutPrecommit = timeoutPrecommit + (r * deltaTimeout);
+        }
+    }
+}
