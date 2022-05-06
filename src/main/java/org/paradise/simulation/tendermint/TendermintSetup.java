@@ -17,5 +17,7 @@ public class TendermintSetup implements SimulationSetup {
 
             agent.start();
         }
+
+        TendermintFinisher.setBegin(System.currentTimeMillis());
     }
 }
