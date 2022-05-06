@@ -387,13 +387,13 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         @Override
         public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
             if (tMsg instanceof ProposalMessage proMsg) {
+                final long h = proMsg.getHeight();
                 final long r = proMsg.getRound();
                 final long vR = proMsg.getValidRound();
 
                 return step == Step.PROPOSE
-                        && isProposer(proMsg.getSender(), height, round)
-                        && height == proMsg.getHeight()
-                        && r == round
+                        && height == h
+                        && round == r
                         && vR == -1;
             } else {
                 return false;
@@ -534,7 +534,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
 
         @Override
         protected void execution(@NonNull TendermintMessage<?> tMsg) {
-            startRound(tMsg.round);
+            startRound(tMsg.getRound());
         }
 
         @Override
