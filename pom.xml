@@ -31,7 +31,7 @@
     <version>0.1.0-SNAPSHOT</version>
 
     <properties>
-        <palmbeach.version>0.1.7-SNAPSHOT</palmbeach.version>
+        <palmbeach.version>0.2.1-SNAPSHOT</palmbeach.version>
         <sonar.language>java</sonar.language>
         <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
         <sonar.dynamicAnalysis>reuseReports</sonar.dynamicAnalysis>
