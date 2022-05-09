@@ -1,4 +1,4 @@
-package org.paradise.simulation.tendermint;
+package org.paradise.simulation.tendermint.validator;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -8,13 +8,11 @@ import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.paradise.palmbeach.basic.messaging.Message;
 import org.paradise.palmbeach.basic.messaging.MessageReceiver;
 import org.paradise.palmbeach.basic.messaging.broadcasting.Broadcaster;
 import org.paradise.palmbeach.blockchain.block.Block;
 import org.paradise.palmbeach.blockchain.block.Blockchain;
 import org.paradise.palmbeach.blockchain.block.NonForkBlockchain;
-import org.paradise.palmbeach.blockchain.transaction.MoneyTx;
 import org.paradise.palmbeach.core.agent.SimpleAgent;
 import org.paradise.palmbeach.core.agent.exception.AgentNotStartedException;
 import org.paradise.palmbeach.core.agent.protocol.Protocol;
@@ -22,8 +20,13 @@ import org.paradise.palmbeach.core.environment.network.Network;
 import org.paradise.palmbeach.core.event.Event;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.utils.context.Context;
+import org.paradise.simulation.tendermint.client.message.ClientTendermintMessage;
+import org.paradise.simulation.tendermint.client.message.TendermintTransactionMessage;
+import org.paradise.simulation.tendermint.validator.message.PrecommitMessage;
+import org.paradise.simulation.tendermint.validator.message.PrevoteMessage;
+import org.paradise.simulation.tendermint.validator.message.ProposalMessage;
+import org.paradise.simulation.tendermint.validator.message.TendermintMessage;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -32,30 +35,40 @@ import static org.paradise.palmbeach.utils.validation.Validate.min;
 
 @Slf4j
 public class Tendermint extends Protocol implements MessageReceiver.MessageReceiverObserver {
+
+    // Constants.
+
+    public static final String TENDERMINT_AGENT_NAME_PREFIX = "TendermintValidator";
+
     // Context.
 
-    public static final String BLOCKCHAIN = "bc";
+    public static final String BLOCKCHAIN = "tendermintBlockchain";
 
     public static final String MAX_HEIGHT = "maxHeight";
     public static final long DEFAULT_MAX_HEIGHT = 100;
 
-    // Variables.
+    public static final String MAX_BLOCK_SIZE = "maxBlockSize";
+    public static final int DEFAULT_MAX_BLOCK_SIZE = 50;
 
-    private final Random random = new Random();
+    // Variables.
 
     private Broadcaster broadcaster;
 
     private long height = 1L;
     private long round = 0L;
     private Step step = Step.PROPOSE;
-    private final Blockchain<MoneyTx> decision;
-    private Block<MoneyTx> lockedValue;
+    @Getter
+    private final Blockchain<TendermintTransaction> decision;
+    private Block<TendermintTransaction> lockedValue;
     private long lockRound = -1;
-    private Block<MoneyTx> validValue;
+    private Block<TendermintTransaction> validValue;
     private long validRound = -1;
 
+    @Getter
     private long timeoutPropose;
+    @Getter
     private long timeoutPrevote;
+    @Getter
     private long timeoutPrecommit;
     private long deltaTimeout;
 
@@ -67,8 +80,10 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
 
     private final Map<Rule, Set<Stage>> ruleAlreadyExecuted = Maps.newHashMap();
 
+    private final Queue<TendermintTransaction> memoryPool;
+    private final Set<TendermintTransaction> setMemoryPool;
+
     @Setter
-    @NonNull
     private Network network;
 
     private final Set<Rule> rules = Sets.newHashSet(new ProposalForRound(), new ProposalAndPrevoteForValidRound(), new PrevoteForRound(),
@@ -83,6 +98,8 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
                                                             Sets.newHashSet()));
         initTimeout();
         getContext().map(BLOCKCHAIN, this.decision);
+        this.memoryPool = Lists.newLinkedList();
+        this.setMemoryPool = Sets.newHashSet();
     }
 
     // Methods.
@@ -105,7 +122,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
 
             round = r;
             step = Step.PROPOSE;
-            Block<MoneyTx> proposal;
+            Block<TendermintTransaction> proposal;
             if (isProposer(getAgent().getIdentifier(), height, round)) {
                 proposal = Objects.requireNonNullElseGet(validValue, this::nextValue);
                 log.info("{} proposer for Stage({}, {}), proposal hash -> {}", getAgent().getIdentifier(), height, round,
@@ -128,21 +145,34 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         return members.get(index);
     }
 
-    private Block<MoneyTx> nextValue() {
+    private Block<TendermintTransaction> nextValue() {
         final long h = height;
         final long timestamp = PalmBeachSimulation.scheduler().getCurrentTime();
         final String previous = decision.getBlock(height - 1).sha256Base64Hash();
-        final Set<MoneyTx> tx = Sets.newHashSet();
-        for (int i = 0; i < random.nextInt(1, 101); i++) {
-            byte[] array = new byte[3];
-            random.nextBytes(array);
-            String sender = new String(array, StandardCharsets.UTF_8);
-            random.nextBytes(array);
-            String receiver = new String(array, StandardCharsets.UTF_8);
-            tx.add(new MoneyTx(timestamp, sender, receiver, random.nextLong(Long.MAX_VALUE)));
-        }
+        final Set<TendermintTransaction> tx = selectTx();
 
         return new Block<>(h, timestamp, previous, tx);
+    }
+
+    private Set<TendermintTransaction> selectTx() {
+        final Set<TendermintTransaction> txSet = Sets.newHashSet();
+
+        // TODO see how to re add tx if our block has not been accepted
+
+        int count = 0;
+        for (int i = 0; i < memoryPool.size(); i++) {
+            TendermintTransaction tx = memoryPool.poll();
+            if (count < maxBlockSize() && isValidTx(tx)) {
+                txSet.add(tx);
+                count++;
+            }
+        }
+
+        return txSet;
+    }
+
+    private boolean isValidTx(TendermintTransaction tx) {
+        return tx.getTimestamp() > 0 && tx.getAmount() >= 1;
     }
 
     private void scheduleTimeoutPropose(long h, long r) {
@@ -192,6 +222,8 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
                 treatsPrevoteMessage(preMsg);
             } else if (contentDelivered instanceof PrecommitMessage preComMsg) {
                 treatsPrecommitMessage(preComMsg);
+            } else if (contentDelivered instanceof ClientTendermintMessage<?> clientMessage) {
+                treatClientTendermintMessage(clientMessage);
             } else {
                 log.error("Agent {} in Tendermint receive a object which is not a TendermintMessage -> Object receive {}",
                           getAgent().getIdentifier(), contentDelivered);
@@ -227,6 +259,17 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         }
     }
 
+    private void treatClientTendermintMessage(ClientTendermintMessage<?> clientMessage) {
+        if (clientMessage instanceof TendermintTransactionMessage txMessage) {
+            TendermintTransaction tx = txMessage.getContent();
+            if (!setMemoryPool.contains(tx)) {
+                memoryPool.offer(tx);
+                setMemoryPool.add(tx);
+                broadcaster.broadcastMessage(txMessage, groupMembership(), network);
+            }
+        }
+    }
+
     private void executeRules(TendermintMessage<?> tMsg) {
         for (Rule rule : rules) {
             if (!rule.isOnlyOneTimeRule()) {
@@ -243,7 +286,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         }
     }
 
-    private void broadcastProposal(long h, long r, Block<MoneyTx> proposal, long vR) {
+    private void broadcastProposal(long h, long r, Block<TendermintTransaction> proposal, long vR) {
         broadcaster.broadcastMessage(new ProposalMessage(getAgent().getIdentifier(), h, r, proposal, vR), groupMembership(), network);
     }
 
@@ -257,15 +300,16 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
 
     @Override
     public boolean interestedBy(Object contentDelivered) {
-        return contentDelivered instanceof TendermintMessage;
+        return contentDelivered instanceof TendermintMessage || contentDelivered instanceof ClientTendermintMessage;
     }
 
-    private boolean isValid(Block<MoneyTx> block, long h) {
+    private boolean isValid(Block<TendermintTransaction> block, long h) {
         return block != null && block.getHeight() == h;
     }
 
     // Getters and Setters.
 
+    @SuppressWarnings("unused")
     public void setBroadcaster(Broadcaster broadcaster) {
         this.broadcaster = broadcaster;
         this.broadcaster.addObserver(this);
@@ -293,9 +337,26 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         }
     }
 
+    @SuppressWarnings("unused")
     public void maxHeight(long maxHeight) {
         min(maxHeight, 5, "MaxHeight must be greater or equal to 5");
         getContext().setLong(MAX_HEIGHT, maxHeight);
+    }
+
+    public int maxBlockSize() {
+        if (getContext().getValue(MAX_BLOCK_SIZE) != null) {
+            int maxBlockSize = getContext().getInt(MAX_BLOCK_SIZE);
+            min(maxBlockSize, 1, "MaxBlockSize must be greater or equal to 1");
+            return maxBlockSize;
+        } else {
+            return DEFAULT_MAX_BLOCK_SIZE;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public void maxBlockSize(int maxBlockSize) {
+        min(maxBlockSize, 1, "MaxBlockSize must be greater or equal to 1");
+        getContext().setInt(MAX_BLOCK_SIZE, maxBlockSize);
     }
 
     // Inner classes.
@@ -403,7 +464,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         @Override
         protected void execution(@NonNull TendermintMessage<?> tMsg) {
             if (tMsg instanceof ProposalMessage proMsg) {
-                final Block<MoneyTx> v = proMsg.getValue();
+                final Block<TendermintTransaction> v = proMsg.getValue();
                 log.debug("{} Execute ProposalForRound -> v {}, h {}, lockRound {}, lockedValue == v {}, isValid(v, height) {}",
                           getAgent().getIdentifier(), v.sha256Base64Hash(), height, lockRound, Objects.equals(lockedValue, v), isValid(v, height));
                 if (isValid(v, height) && (lockRound == -1 || Objects.equals(lockedValue, v))) {
@@ -577,7 +638,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         @Override
         protected void execution(@NonNull TendermintMessage<?> tMsg) {
             Proposal proposal = findProposal(height, round);
-            final Block<MoneyTx> v = proposal.proposal();
+            final Block<TendermintTransaction> v = proposal.proposal();
             final long vR = proposal.vR();
 
             if (isValid(v, height) && (lockRound <= vR || Objects.equals(lockedValue, v))) {
@@ -609,7 +670,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
             } else if (tMsg instanceof PrevoteMessage preMsg) {
                 prevote = preMsg.getPrevote();
                 proposal = findProposal(prevote.h(), prevote.r());
-                log.debug("{} ProposalAndPrevoteForRound by PrevoteMsg, prevote {}, proposal {}", getAgent().getIdentifier(), prevote,
+                log.debug("{} ProposalAndPrevoteForRound by PrevoteMessage, prevote {}, proposal {}", getAgent().getIdentifier(), prevote,
                           proposal != null ? proposal.proposal().sha256Base64Hash() : null);
                 if (proposal == null || !proposal.proposal().sha256Base64Hash().equals(prevote.idV())) {
                     log.debug("{} OUT Prevote.idV {}", getAgent().getIdentifier(), prevote.idV());
@@ -619,7 +680,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
                 return false;
             }
 
-            final Block<MoneyTx> v = proposal.proposal();
+            final Block<TendermintTransaction> v = proposal.proposal();
 
             log.debug("{} evaluate ProposalAndPrevoteForRound, proposal = {}, prevote = {}, prevoteCounter.containsKey {}",
                       getAgent().getIdentifier(),
@@ -633,7 +694,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
 
         @Override
         protected void execution(@NonNull TendermintMessage<?> tMsg) {
-            final Block<MoneyTx> v = findProposal(height, round).proposal();
+            final Block<TendermintTransaction> v = findProposal(height, round).proposal();
 
             log.debug("{} receive 2f + 1 Prevote of v = {}", getAgent().getIdentifier(), v.sha256Base64Hash());
 
@@ -683,7 +744,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
 
         @Override
         protected void execution(@NonNull TendermintMessage<?> tMsg) {
-            final Block<MoneyTx> v = findProposal(height, tMsg.round).proposal();
+            final Block<TendermintTransaction> v = findProposal(height, tMsg.getRound()).proposal();
 
             if (isValid(v, height)) {
                 decision.addBlock(v);
@@ -706,99 +767,10 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         }
     }
 
-    @EqualsAndHashCode(callSuper = true)
-    private abstract static class TendermintMessage<T> extends Message<T> {
-
-        // Variables.
-
-        @Getter
-        @NonNull
-        private final SimpleAgent.AgentIdentifier sender;
-
-        @Getter
-        private final long height;
-
-        @Getter
-        private final long round;
-
-        // Constructors.
-
-        protected TendermintMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, T value) {
-            super(value);
-            this.sender = sender;
-            this.height = height;
-            this.round = round;
-        }
-
-        // Getters.
-
-        public Stage getStage() {
-            return new Stage(height, round);
-        }
-
-        public T getValue() {
-            return getContent();
-        }
-    }
-
-    @EqualsAndHashCode(callSuper = true)
-    private static class ProposalMessage extends TendermintMessage<Block<MoneyTx>> {
-
-        // Variables.
-
-        @Getter
-        private final long validRound;
-
-        // Constructors.
-
-        public ProposalMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, Block<MoneyTx> proposal, long validRound) {
-            super(sender, height, round, proposal);
-            this.validRound = validRound;
-        }
-
-        // Methods.
-
-        public Proposal getProposal() {
-            return new Proposal(getHeight(), getRound(), getContent(), getValidRound());
-        }
-    }
-
-    private static record Proposal(long h, long r, Block<MoneyTx> proposal, long vR) {
-    }
-
-    @EqualsAndHashCode(callSuper = true)
-    private static class PrevoteMessage extends TendermintMessage<String> {
-
-        // Constructors.
-
-        public PrevoteMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, String value) {
-            super(sender, height, round, value);
-        }
-
-        // Methods.
-
-        public Prevote getPrevote() {
-            return new Prevote(getHeight(), getRound(), getContent());
-        }
+    public static record Proposal(long h, long r, Block<TendermintTransaction> proposal, long vR) {
     }
 
     public static record Prevote(long h, long r, String idV) {
-    }
-
-    @EqualsAndHashCode(callSuper = true)
-    private static class PrecommitMessage extends TendermintMessage<String> {
-
-        // Constructors.
-
-        public PrecommitMessage(@NonNull SimpleAgent.AgentIdentifier sender, long height, long round, String value) {
-            super(sender, height, round, value);
-        }
-
-        // Methods.
-
-        public Precommit getPrecommit() {
-            return new Precommit(getHeight(), getRound(), getContent());
-        }
     }
 
     public static record Precommit(long h, long r, String idV) {
