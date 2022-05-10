@@ -1,16 +1,21 @@
 package org.paradise.simulation.tendermint;
 
 import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
 import lombok.extern.slf4j.Slf4j;
 import org.paradise.palmbeach.blockchain.block.Block;
 import org.paradise.palmbeach.blockchain.block.Blockchain;
 import org.paradise.palmbeach.core.agent.SimpleAgent;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.core.simulation.SimulationFinisher;
+import org.paradise.simulation.tendermint.client.TendermintClient;
 import org.paradise.simulation.tendermint.validator.Tendermint;
 import org.paradise.simulation.tendermint.validator.TendermintTransaction;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 public class TendermintFinisher implements SimulationFinisher {
@@ -22,10 +27,13 @@ public class TendermintFinisher implements SimulationFinisher {
     @Override
 
     public void finishSimulation() {
+        displayBlockchain();
         displayDuration();
         displayGSTAverage();
         displayBlockchainVerification();
-        displayBlockchain();
+        displayBlockchainData();
+        displayTransactionVerification();
+        displayVerifyDoublonInBC();
     }
 
     public static void setBegin(double begin) {
@@ -80,7 +88,7 @@ public class TendermintFinisher implements SimulationFinisher {
         boolean allHeightCorrect = true;
 
         List<SimpleAgent> agents = PalmBeachSimulation.allAgents();
-        List<Blockchain<TendermintTransaction>> allBlockchains = getAllAgentBlockchain(agents);
+        List<Blockchain<TendermintTransaction>> allBlockchains = getAllBlockchains(agents);
 
         Pair<Long, Long> pairMinMaxHeight = displayMinMaxHeight(allBlockchains);
 
@@ -144,23 +152,11 @@ public class TendermintFinisher implements SimulationFinisher {
         return blockAtHeight;
     }
 
-    private List<Blockchain<TendermintTransaction>> getAllAgentBlockchain(List<SimpleAgent> agents) {
-        List<Blockchain<TendermintTransaction>> allBlockchains = Lists.newArrayList();
-        for (SimpleAgent agent : agents) {
-            if (isTendermintValidator(agent)) {
-                Tendermint tendermint = agent.getProtocol(Tendermint.class);
-                Blockchain<TendermintTransaction> blockchain = tendermint.getDecision();
-                allBlockchains.add(blockchain);
-            }
-        }
-        return allBlockchains;
-    }
-
     private void displayBlockchain() {
         displayLogTitle("BLOCKCHAIN");
 
         List<SimpleAgent> agents = PalmBeachSimulation.allAgents();
-        List<Blockchain<TendermintTransaction>> allBlockchains = getAllAgentBlockchain(agents);
+        List<Blockchain<TendermintTransaction>> allBlockchains = getAllBlockchains(agents);
         Blockchain<TendermintTransaction> blockchain = allBlockchains.get(0);
 
         for (int i = 0; i <= blockchain.currentHeight(); i++) {
@@ -173,7 +169,12 @@ public class TendermintFinisher implements SimulationFinisher {
         displayHorizontalSeparator();
         displayLine("  Block %d, Timestamp %d, Previous %s".formatted(block.getHeight(), block.getTimestamp(), block.getPrevious()));
         displayLine("  SHA256: %s".formatted(block.sha256Base64Hash()));
+        displayLine("  Size: %d".formatted(block.getTransactions().size()));
         displayHorizontalSeparator();
+    }
+
+    @SuppressWarnings("unused")
+    private void displayTx(Block<TendermintTransaction> block) {
         for (TendermintTransaction tx : block.getTransactions()) {
             displayLine("  T:%d, S: %s, R:%s, Amount: %d".formatted(tx.getTimestamp(), tx.getSender(), tx.getReceiver(), tx.getAmount()));
         }
@@ -208,14 +209,176 @@ public class TendermintFinisher implements SimulationFinisher {
         log.info("{}", builder);
     }
 
-    private boolean isTendermintValidator(SimpleAgent agent) {
-        return agent.getProtocol(Tendermint.class) != null;
+    private void displayBlockchainData() {
+        displayLogTitle("Blockchain data");
+
+        List<SimpleAgent> agents = PalmBeachSimulation.allAgents();
+        List<Blockchain<TendermintTransaction>> allBlockchains = getAllBlockchains(agents);
+
+        Pair<Long, Long> blockCreationTimeMinMax = blockCreationTimeMinMax(allBlockchains.get(0));
+        double blockCreationTimeAverage = computeBlockCreationTimeAverage(allBlockchains.get(0));
+
+        log.info("Min creation time = {}", blockCreationTimeMinMax.first());
+        log.info("Max creation time = {}", blockCreationTimeMinMax.second());
+        log.info("Average block creation time = {}", blockCreationTimeAverage);
+
+        SimpleAgent validator = randomValidator(agents);
+        Tendermint tendermint = validator.getProtocol(Tendermint.class);
+        Map<Long, Long> heightRound = tendermint.getMapHeightRound();
+        long minNbRound = Long.MAX_VALUE;
+        long maxNbRound = Long.MIN_VALUE;
+        double roundAverage = 0.d;
+
+        for (Map.Entry<Long, Long> entry : heightRound.entrySet()) {
+            long r = entry.getValue();
+
+            if (minNbRound > r) {
+                minNbRound = r;
+            }
+
+            if (maxNbRound < r) {
+                maxNbRound = r;
+            }
+
+            roundAverage += r;
+        }
+
+        roundAverage = roundAverage / heightRound.size();
+
+        log.info("Height = {}", heightRound.size());
+        log.info("Min round = {}", minNbRound);
+        log.info("Max round = {}", maxNbRound);
+        log.info("Average round = {}", roundAverage);
+    }
+
+    private Pair<Long, Long> blockCreationTimeMinMax(Blockchain<TendermintTransaction> bc) {
+        long min = Long.MAX_VALUE;
+        long max = Long.MIN_VALUE;
+
+        for (long i = 2; i <= bc.currentHeight(); i++) {
+            long timeBlockCreation = bc.getBlock(i).getTimestamp() - bc.getBlock(i - 1L).getTimestamp();
+            if (min > timeBlockCreation) {
+                min = timeBlockCreation;
+            }
+
+            if (max < timeBlockCreation) {
+                max = timeBlockCreation;
+            }
+        }
+
+        return new Pair<>(min, max);
+    }
+
+    private double computeBlockCreationTimeAverage(Blockchain<TendermintTransaction> bc) {
+        double blockCreationTimeAverage = 0L;
+        for (long i = 2L; i <= bc.currentHeight(); i++) {
+            long timeBlockCreation = bc.getBlock(i).getTimestamp() - bc.getBlock(i - 1L).getTimestamp();
+            blockCreationTimeAverage += timeBlockCreation;
+        }
+
+        return blockCreationTimeAverage / (bc.currentHeight() - 1);
+    }
+
+    private void displayTransactionVerification() {
+        displayLogTitle("Transaction Verification");
+
+        Set<TendermintTransaction> allTransactionSent = getAllTransactionSent();
+
+        boolean allInBlockchain = true;
+
+        List<Blockchain<TendermintTransaction>> allBlockchains = getAllBlockchains(PalmBeachSimulation.allAgents());
+        for (Blockchain<TendermintTransaction> bc : allBlockchains) {
+            Set<TendermintTransaction> bcTx = allTxInBc(bc);
+            if (!bcTx.containsAll(allTransactionSent)) {
+                allInBlockchain = false;
+                log.error("A Blockchain does not contain all transactions sent");
+            }
+        }
+
+        log.info("Total transaction sent: {}", allTransactionSent.size());
+        log.info("All transactions sent are in the blockchain {}", allInBlockchain);
+    }
+
+    private Set<TendermintTransaction> allTxInBc(Blockchain<TendermintTransaction> bc) {
+        Set<TendermintTransaction> allTx = Sets.newHashSet();
+        for (Block<TendermintTransaction> block : bc) {
+            allTx.addAll(block.getTransactions());
+        }
+        return allTx;
+    }
+
+    private Set<TendermintTransaction> getAllTransactionSent() {
+        Set<TendermintTransaction> allTransactionSent = Sets.newHashSet();
+        List<SimpleAgent> clientAgents = PalmBeachSimulation.allAgents().stream().filter(this::isTendermintClient).toList();
+
+        for (SimpleAgent agent : clientAgents) {
+            TendermintClient tendermintClient = agent.getProtocol(TendermintClient.class);
+            allTransactionSent.addAll(tendermintClient.getTransactionSent());
+        }
+
+        return allTransactionSent;
+    }
+
+    private void displayVerifyDoublonInBC() {
+        displayLogTitle("Doublon verification");
+
+        List<SimpleAgent> agents = PalmBeachSimulation.allAgents();
+        List<Blockchain<TendermintTransaction>> allBlockchains = getAllBlockchains(agents);
+        Blockchain<TendermintTransaction> bc = allBlockchains.get(0);
+
+        Set<TendermintTransaction> allTx = Sets.newHashSet();
+        long nbDoublon = 0L;
+        long totalTxInBc = 0L;
+
+        for (Block<TendermintTransaction> block : bc) {
+            for (TendermintTransaction tx : block.getTransactions()) {
+                if (!allTx.add(tx)) {
+                    nbDoublon++;
+                }
+            }
+            totalTxInBc += block.getTransactions().size();
+        }
+
+        log.info("Nb doublon = {}", nbDoublon);
+        log.info("Total tx in Blockchain = {}", totalTxInBc);
+    }
+
+    private List<Blockchain<TendermintTransaction>> getAllBlockchains(List<SimpleAgent> agents) {
+        List<Blockchain<TendermintTransaction>> allBlockchains = Lists.newArrayList();
+        for (SimpleAgent agent : agents) {
+            if (isTendermintValidator(agent)) {
+                Tendermint tendermint = agent.getProtocol(Tendermint.class);
+                Blockchain<TendermintTransaction> blockchain = tendermint.getDecision();
+                allBlockchains.add(blockchain);
+            }
+        }
+        Collections.shuffle(allBlockchains);
+        return allBlockchains;
+    }
+
+    private SimpleAgent randomValidator(List<SimpleAgent> agents) {
+        List<SimpleAgent> allAgents = Lists.newArrayList(agents);
+        Collections.shuffle(allAgents);
+        for (SimpleAgent agent : allAgents) {
+            if (isTendermintValidator(agent)) {
+                return agent;
+            }
+        }
+        return null;
     }
 
     private void displayLogTitle(String title) {
         log.info("---------------------------------------------------------------");
         log.info("{}", title.toUpperCase());
         log.info("---------------------------------------------------------------");
+    }
+
+    private boolean isTendermintValidator(SimpleAgent agent) {
+        return agent.getProtocol(Tendermint.class) != null;
+    }
+
+    private boolean isTendermintClient(SimpleAgent agent) {
+        return agent.getProtocol(TendermintClient.class) != null;
     }
 
     // Inner classes.

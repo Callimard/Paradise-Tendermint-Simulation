@@ -14,7 +14,7 @@ public class TendermintSetup implements SimulationSetup {
     @Override
     public void setupSimulation() {
         log.info("Start all agents");
-        Network network = PalmBeachSimulation.getEnvironment("simpleEnvironment").getNetwork("fullyConnectedNetwork");
+        Network network = PalmBeachSimulation.getEnvironment("simpleEnvironment").getNetwork("randomConnectedNetwork");
         for (SimpleAgent agent : PalmBeachSimulation.allAgents()) {
             Tendermint tendermint = agent.getProtocol(Tendermint.class);
             if (tendermint != null)

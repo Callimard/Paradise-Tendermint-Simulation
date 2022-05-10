@@ -20,6 +20,7 @@ import org.paradise.palmbeach.core.environment.network.Network;
 import org.paradise.palmbeach.core.event.Event;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.utils.context.Context;
+import org.paradise.palmbeach.utils.validation.Validate;
 import org.paradise.simulation.tendermint.client.message.ClientTendermintMessage;
 import org.paradise.simulation.tendermint.client.message.TendermintTransactionMessage;
 import org.paradise.simulation.tendermint.validator.message.PrecommitMessage;
@@ -83,12 +84,19 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
     private final Queue<TendermintTransaction> memoryPool;
     private final Set<TendermintTransaction> setMemoryPool;
 
+    private final Set<TendermintTransaction> polledTx;
+
     @Setter
     private Network network;
 
     private final Set<Rule> rules = Sets.newHashSet(new ProposalForRound(), new ProposalAndPrevoteForValidRound(), new PrevoteForRound(),
                                                     new ProposalAndPrevoteForRound(), new PrevoteNilForRound(), new PrecommitForRound(),
                                                     new ProposalAndPrecommitForRound(), new ChangeRound());
+
+    // Analyse
+
+    @Getter
+    private final Map<Long, Long> mapHeightRound;
 
     // Constructors.
 
@@ -100,6 +108,8 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         getContext().map(BLOCKCHAIN, this.decision);
         this.memoryPool = Lists.newLinkedList();
         this.setMemoryPool = Sets.newHashSet();
+        this.polledTx = Sets.newHashSet();
+        this.mapHeightRound = Maps.newHashMap();
     }
 
     // Methods.
@@ -157,12 +167,11 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
     private Set<TendermintTransaction> selectTx() {
         final Set<TendermintTransaction> txSet = Sets.newHashSet();
 
-        // TODO see how to re add tx if our block has not been accepted
-
         int count = 0;
-        for (int i = 0; i < memoryPool.size(); i++) {
-            TendermintTransaction tx = memoryPool.poll();
-            if (count < maxBlockSize() && isValidTx(tx)) {
+        for (int i = 0; i < memoryPool.size() && count < maxBlockSize(); i++) {
+            TendermintTransaction tx = pollTx();
+            if (isValidTx(tx)) {
+                polledTx.add(tx);
                 txSet.add(tx);
                 count++;
             }
@@ -171,8 +180,14 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         return txSet;
     }
 
+    private TendermintTransaction pollTx() {
+        TendermintTransaction tx = memoryPool.poll();
+        setMemoryPool.remove(tx);
+        return tx;
+    }
+
     private boolean isValidTx(TendermintTransaction tx) {
-        return tx.getTimestamp() > 0 && tx.getAmount() >= 1;
+        return tx != null && tx.getTimestamp() > 0 && tx.getAmount() >= 1;
     }
 
     private void scheduleTimeoutPropose(long h, long r) {
@@ -328,35 +343,22 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
     }
 
     public long maxHeight() {
-        if (getContext().getValue(MAX_HEIGHT) != null) {
-            long maxHeight = getContext().getLong(MAX_HEIGHT);
-            min(maxHeight, 5, "MaxHeight must be greater or equal to 5");
-            return maxHeight;
-        } else {
-            return DEFAULT_MAX_HEIGHT;
-        }
+        return getContext().getLong(MAX_HEIGHT, DEFAULT_MAX_HEIGHT, new Validate.MinLongValidator(5L, "MaxHeight must be greater or equal to 5"));
     }
 
     @SuppressWarnings("unused")
     public void maxHeight(long maxHeight) {
-        min(maxHeight, 5, "MaxHeight must be greater or equal to 5");
-        getContext().setLong(MAX_HEIGHT, maxHeight);
+        getContext().setLong(MAX_HEIGHT, maxHeight, new Validate.MinLongValidator(5L, "MaxHeight must be greater or equal to 5"));
     }
 
     public int maxBlockSize() {
-        if (getContext().getValue(MAX_BLOCK_SIZE) != null) {
-            int maxBlockSize = getContext().getInt(MAX_BLOCK_SIZE);
-            min(maxBlockSize, 1, "MaxBlockSize must be greater or equal to 1");
-            return maxBlockSize;
-        } else {
-            return DEFAULT_MAX_BLOCK_SIZE;
-        }
+        return getContext().getInt(MAX_BLOCK_SIZE, DEFAULT_MAX_BLOCK_SIZE, new Validate.MinIntValidator(1, "MaxBlockSize must be greater or equal " +
+                "to 1"));
     }
 
     @SuppressWarnings("unused")
     public void maxBlockSize(int maxBlockSize) {
-        min(maxBlockSize, 1, "MaxBlockSize must be greater or equal to 1");
-        getContext().setInt(MAX_BLOCK_SIZE, maxBlockSize);
+        getContext().setInt(MAX_BLOCK_SIZE, maxBlockSize, new Validate.MinIntValidator(1, "MaxBlockSize must be greater or equal to 1"));
     }
 
     // Inner classes.
@@ -747,11 +749,71 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
             final Block<TendermintTransaction> v = findProposal(height, tMsg.getRound()).proposal();
 
             if (isValid(v, height)) {
-                decision.addBlock(v);
-                height += 1;
-                resetTendermint();
-                startRound(0);
+                addBlock(v);
+                nextHeight();
             }
+        }
+
+        private void addBlock(Block<TendermintTransaction> v) {
+            decision.addBlock(v);
+            Set<TendermintTransaction> blockTransactions = v.getTransactions();
+            reAddPolledTx(blockTransactions);
+            clearTxAddedInBlockchain(blockTransactions);
+        }
+
+        private void reAddPolledTx(Set<TendermintTransaction> blockTransactions) {
+            for (TendermintTransaction tx : polledTx) {
+                if (!blockTransactions.contains(tx)) {
+                    memoryPool.add(tx);
+                    setMemoryPool.add(tx);
+                }
+            }
+        }
+
+        private void clearTxAddedInBlockchain(Set<TendermintTransaction> blockTransactions) {
+            for (TendermintTransaction tx : blockTransactions) {
+                setMemoryPool.remove(tx);
+                memoryPool.remove(tx);
+            }
+        }
+
+        private void nextHeight() {
+            mapHeightRound.put(height, round);
+
+            clearUselessProposal();
+            clearUselessPrevote();
+            clearUselessPrecommit();
+
+            polledTx.clear();
+            height += 1;
+            resetTendermint();
+            startRound(0);
+        }
+
+        private void clearUselessProposal() {
+            proposalReceived.removeIf(proposal -> proposal.h <= height);
+        }
+
+        private void clearUselessPrevote() {
+            prevoteReceived.entrySet().removeIf(entry -> {
+                Stage stage = entry.getKey();
+                return stage.h() <= height;
+            });
+            prevoteCounter.entrySet().removeIf(entry -> {
+                Prevote prevote = entry.getKey();
+                return prevote.h() <= height;
+            });
+        }
+
+        private void clearUselessPrecommit() {
+            precommitReceived.entrySet().removeIf(entry -> {
+                Stage stage = entry.getKey();
+                return stage.h() <= height;
+            });
+            precommitCounter.entrySet().removeIf(entry -> {
+                Precommit prevote = entry.getKey();
+                return prevote.h() <= height;
+            });
         }
 
         private void resetTendermint() {
