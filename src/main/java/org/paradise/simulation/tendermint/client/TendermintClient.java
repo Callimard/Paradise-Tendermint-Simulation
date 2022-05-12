@@ -196,9 +196,10 @@ public class TendermintClient extends Protocol {
 
         @Override
         public void execute() {
-            sendTx();
-            if (sendingCounter++ < nbSendingTx()) {
+            if (sendingCounter < nbSendingTx()) {
+                sendTx();
                 scheduleNextSending();
+                sendingCounter++;
             }
         }
 
@@ -208,7 +209,7 @@ public class TendermintClient extends Protocol {
         }
 
         private void sendTx() {
-            log.info("{} sendTx for the {}th time", getAgent().getIdentifier(), sendingCounter + 1);
+            log.info("{} sendTx for the {}th time", getAgent().getIdentifier(), sendingCounter);
             for (int i = 0; i < random.nextInt(minTxCreated(), maxTxCreated() + 1); i++) {
                 String sender = getAgent().getIdentifier().toString();
                 String receiver = String.valueOf(random.nextInt(5000));

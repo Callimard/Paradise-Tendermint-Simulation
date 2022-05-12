@@ -34,6 +34,7 @@ public class TendermintFinisher implements SimulationFinisher {
         displayBlockchainData();
         displayTransactionVerification();
         displayVerifyDoublonInBC();
+        displayBlockFill();
     }
 
     public static void setBegin(double begin) {
@@ -341,6 +342,37 @@ public class TendermintFinisher implements SimulationFinisher {
 
         log.info("Nb doublon = {}", nbDoublon);
         log.info("Total tx in Blockchain = {}", totalTxInBc);
+    }
+
+    private void displayBlockFill() {
+        displayLogTitle("Block fill");
+
+        List<SimpleAgent> agents = PalmBeachSimulation.allAgents();
+        List<Blockchain<TendermintTransaction>> allBlockchains = getAllBlockchains(agents);
+        Blockchain<TendermintTransaction> bc = allBlockchains.get(0);
+
+        long minSize = Long.MAX_VALUE;
+        long maxSize = Long.MIN_VALUE;
+        double sizeAverage = 0.d;
+
+        for (Block<TendermintTransaction> block : bc) {
+            Set<TendermintTransaction> txs = block.getTransactions();
+            if (minSize > txs.size()) {
+                minSize = txs.size();
+            }
+
+            if (maxSize < txs.size()) {
+                maxSize = txs.size();
+            }
+
+            sizeAverage += txs.size();
+        }
+
+        sizeAverage = sizeAverage / (bc.currentHeight() - 1);
+
+        log.info("Block size min = {}", minSize);
+        log.info("Block size max = {}", maxSize);
+        log.info("Block size average = {}", sizeAverage);
     }
 
     private List<Blockchain<TendermintTransaction>> getAllBlockchains(List<SimpleAgent> agents) {

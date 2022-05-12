@@ -32,7 +32,6 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static org.paradise.palmbeach.core.simulation.PalmBeachSimulation.scheduleEvent;
-import static org.paradise.palmbeach.utils.validation.Validate.min;
 
 @Slf4j
 public class Tendermint extends Protocol implements MessageReceiver.MessageReceiverObserver {
@@ -89,6 +88,8 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
     @Setter
     private Network network;
 
+    private final Set<SimpleAgent.AgentIdentifier> groupMembership;
+
     private final Set<Rule> rules = Sets.newHashSet(new ProposalForRound(), new ProposalAndPrevoteForValidRound(), new PrevoteForRound(),
                                                     new ProposalAndPrevoteForRound(), new PrevoteNilForRound(), new PrecommitForRound(),
                                                     new ProposalAndPrecommitForRound(), new ChangeRound());
@@ -110,6 +111,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
         this.setMemoryPool = Sets.newHashSet();
         this.polledTx = Sets.newHashSet();
         this.mapHeightRound = Maps.newHashMap();
+        this.groupMembership = Sets.newHashSet();
     }
 
     // Methods.
@@ -331,7 +333,14 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
     }
 
     public Set<SimpleAgent.AgentIdentifier> groupMembership() {
-        return network.getEnvironment().evolvingAgents();
+        if (groupMembership.isEmpty()) {
+            Set<SimpleAgent.AgentIdentifier> tendermintAgents = network.getEnvironment().evolvingAgents().stream()
+                    .filter(agent -> PalmBeachSimulation.getAgent(agent).getProtocol(Tendermint.class) != null)
+                    .collect(Collectors.toSet());
+            groupMembership.addAll(tendermintAgents);
+        }
+
+        return groupMembership;
     }
 
     public long f() {
@@ -821,6 +830,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
             lockedValue = null;
             validRound = -1;
             validValue = null;
+            initTimeout();
         }
 
         @Override
