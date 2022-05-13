@@ -34,11 +34,11 @@ import java.util.stream.Collectors;
 import static org.paradise.palmbeach.core.simulation.PalmBeachSimulation.scheduleEvent;
 
 @Slf4j
-public class Tendermint extends Protocol implements MessageReceiver.MessageReceiverObserver {
+public class TendermintValidator extends Protocol implements MessageReceiver.MessageReceiverObserver {
 
     // Constants.
 
-    public static final String TENDERMINT_AGENT_NAME_PREFIX = "TendermintValidator";
+    public static final String TENDERMINT_VALIDATOR_AGENT_NAME_PREFIX = "TendermintValidator";
 
     // Context.
 
@@ -101,7 +101,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
 
     // Constructors.
 
-    public Tendermint(@NonNull SimpleAgent agent, Context context) {
+    public TendermintValidator(@NonNull SimpleAgent agent, Context context) {
         super(agent, context);
         this.decision = new NonForkBlockchain<>(new Block<>(Block.GENESIS_BLOCK_HEIGHT, Block.GENESIS_BLOCK_TIMESTAMP, Block.GENESIS_BLOCK_PREVIOUS,
                                                             Sets.newHashSet()));
@@ -335,7 +335,7 @@ public class Tendermint extends Protocol implements MessageReceiver.MessageRecei
     public Set<SimpleAgent.AgentIdentifier> groupMembership() {
         if (groupMembership.isEmpty()) {
             Set<SimpleAgent.AgentIdentifier> tendermintAgents = network.getEnvironment().evolvingAgents().stream()
-                    .filter(agent -> PalmBeachSimulation.getAgent(agent).getProtocol(Tendermint.class) != null)
+                    .filter(agent -> PalmBeachSimulation.getAgent(agent).getProtocol(TendermintValidator.class) != null)
                     .collect(Collectors.toSet());
             groupMembership.addAll(tendermintAgents);
         }

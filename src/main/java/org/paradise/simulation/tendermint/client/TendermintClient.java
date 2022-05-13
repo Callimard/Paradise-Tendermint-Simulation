@@ -15,7 +15,7 @@ import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.utils.context.Context;
 import org.paradise.palmbeach.utils.validation.Validate;
 import org.paradise.simulation.tendermint.client.message.TendermintTransactionMessage;
-import org.paradise.simulation.tendermint.validator.Tendermint;
+import org.paradise.simulation.tendermint.validator.TendermintValidator;
 import org.paradise.simulation.tendermint.validator.TendermintTransaction;
 
 import java.util.Collections;
@@ -97,7 +97,7 @@ public class TendermintClient extends Protocol {
         connectedValidators.clear();
         List<SimpleAgent.AgentIdentifier> tendermintAgents =
                 PalmBeachSimulation.allAgents().stream().map(agent -> (SimpleAgent.SimpleAgentIdentifier) agent.getIdentifier())
-                        .filter(identifier -> identifier.getAgentName().contains(Tendermint.TENDERMINT_AGENT_NAME_PREFIX))
+                        .filter(identifier -> identifier.getAgentName().contains(TendermintValidator.TENDERMINT_VALIDATOR_AGENT_NAME_PREFIX))
                         .map(identifier -> (SimpleAgent.AgentIdentifier) identifier).collect(Collectors.toList());
 
         Collections.shuffle(tendermintAgents);

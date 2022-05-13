@@ -3,7 +3,7 @@ package org.paradise.simulation.tendermint.validator.message;
 import lombok.EqualsAndHashCode;
 import lombok.NonNull;
 import org.paradise.palmbeach.core.agent.SimpleAgent;
-import org.paradise.simulation.tendermint.validator.Tendermint;
+import org.paradise.simulation.tendermint.validator.TendermintValidator;
 
 @EqualsAndHashCode(callSuper = true)
 public class PrecommitMessage extends TendermintMessage<String> {
@@ -16,7 +16,7 @@ public class PrecommitMessage extends TendermintMessage<String> {
 
     // Methods.
 
-    public Tendermint.Precommit getPrecommit() {
-        return new Tendermint.Precommit(getHeight(), getRound(), getContent());
+    public TendermintValidator.Precommit getPrecommit() {
+        return new TendermintValidator.Precommit(getHeight(), getRound(), getContent());
     }
 }

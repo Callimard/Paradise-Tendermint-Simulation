@@ -6,7 +6,7 @@ import org.paradise.palmbeach.core.environment.network.Network;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.core.simulation.SimulationSetup;
 import org.paradise.simulation.tendermint.client.TendermintClient;
-import org.paradise.simulation.tendermint.validator.Tendermint;
+import org.paradise.simulation.tendermint.validator.TendermintValidator;
 
 @Slf4j
 public class TendermintSetup implements SimulationSetup {
@@ -16,9 +16,9 @@ public class TendermintSetup implements SimulationSetup {
         log.info("Start all agents");
         Network network = PalmBeachSimulation.getEnvironment("simpleEnvironment").getNetwork("fullyConnectedNetwork");
         for (SimpleAgent agent : PalmBeachSimulation.allAgents()) {
-            Tendermint tendermint = agent.getProtocol(Tendermint.class);
-            if (tendermint != null)
-                tendermint.setNetwork(network);
+            TendermintValidator tendermintValidator = agent.getProtocol(TendermintValidator.class);
+            if (tendermintValidator != null)
+                tendermintValidator.setNetwork(network);
 
             TendermintClient tendermintClient = agent.getProtocol(TendermintClient.class);
             if (tendermintClient != null)

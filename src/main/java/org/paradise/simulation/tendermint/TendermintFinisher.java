@@ -9,7 +9,7 @@ import org.paradise.palmbeach.core.agent.SimpleAgent;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.core.simulation.SimulationFinisher;
 import org.paradise.simulation.tendermint.client.TendermintClient;
-import org.paradise.simulation.tendermint.validator.Tendermint;
+import org.paradise.simulation.tendermint.validator.TendermintValidator;
 import org.paradise.simulation.tendermint.validator.TendermintTransaction;
 
 import java.util.Collections;
@@ -63,10 +63,10 @@ public class TendermintFinisher implements SimulationFinisher {
         for (SimpleAgent agent : agents) {
             if (isTendermintValidator(agent)) {
                 nbValidator++;
-                Tendermint tendermint = agent.getProtocol(Tendermint.class);
-                timeoutProposeAverage += tendermint.getTimeoutPropose();
-                timeoutPrevoteAverage += tendermint.getTimeoutPrevote();
-                timeoutPrecommitAverage += tendermint.getTimeoutPrecommit();
+                TendermintValidator tendermintValidator = agent.getProtocol(TendermintValidator.class);
+                timeoutProposeAverage += tendermintValidator.getTimeoutPropose();
+                timeoutPrevoteAverage += tendermintValidator.getTimeoutPrevote();
+                timeoutPrecommitAverage += tendermintValidator.getTimeoutPrecommit();
             }
         }
 
@@ -224,8 +224,8 @@ public class TendermintFinisher implements SimulationFinisher {
         log.info("Average block creation time = {}", blockCreationTimeAverage);
 
         SimpleAgent validator = randomValidator(agents);
-        Tendermint tendermint = validator.getProtocol(Tendermint.class);
-        Map<Long, Long> heightRound = tendermint.getMapHeightRound();
+        TendermintValidator tendermintValidator = validator.getProtocol(TendermintValidator.class);
+        Map<Long, Long> heightRound = tendermintValidator.getMapHeightRound();
         long minNbRound = Long.MAX_VALUE;
         long maxNbRound = Long.MIN_VALUE;
         double roundAverage = 0.d;
@@ -379,8 +379,8 @@ public class TendermintFinisher implements SimulationFinisher {
         List<Blockchain<TendermintTransaction>> allBlockchains = Lists.newArrayList();
         for (SimpleAgent agent : agents) {
             if (isTendermintValidator(agent)) {
-                Tendermint tendermint = agent.getProtocol(Tendermint.class);
-                Blockchain<TendermintTransaction> blockchain = tendermint.getDecision();
+                TendermintValidator tendermintValidator = agent.getProtocol(TendermintValidator.class);
+                Blockchain<TendermintTransaction> blockchain = tendermintValidator.getDecision();
                 allBlockchains.add(blockchain);
             }
         }
@@ -406,7 +406,7 @@ public class TendermintFinisher implements SimulationFinisher {
     }
 
     private boolean isTendermintValidator(SimpleAgent agent) {
-        return agent.getProtocol(Tendermint.class) != null;
+        return agent.getProtocol(TendermintValidator.class) != null;
     }
 
     private boolean isTendermintClient(SimpleAgent agent) {

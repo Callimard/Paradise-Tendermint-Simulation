@@ -5,7 +5,7 @@ import lombok.Getter;
 import lombok.NonNull;
 import org.paradise.palmbeach.basic.messaging.Message;
 import org.paradise.palmbeach.core.agent.SimpleAgent;
-import org.paradise.simulation.tendermint.validator.Tendermint;
+import org.paradise.simulation.tendermint.validator.TendermintValidator;
 
 @EqualsAndHashCode(callSuper = true)
 public abstract class TendermintMessage<T> extends Message<T> {
@@ -33,8 +33,8 @@ public abstract class TendermintMessage<T> extends Message<T> {
 
     // Getters.
 
-    public Tendermint.Stage getStage() {
-        return new Tendermint.Stage(height, round);
+    public TendermintValidator.Stage getStage() {
+        return new TendermintValidator.Stage(height, round);
     }
 
     public T getValue() {
