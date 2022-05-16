@@ -10,7 +10,7 @@ import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.core.simulation.SimulationFinisher;
 import org.paradise.simulation.tendermint.client.TendermintClient;
 import org.paradise.simulation.tendermint.validator.TendermintValidator;
-import org.paradise.simulation.tendermint.validator.TendermintTransaction;
+import org.paradise.simulation.tendermint.transaction.TendermintTransaction;
 
 import java.util.Collections;
 import java.util.List;
@@ -177,7 +177,7 @@ public class TendermintFinisher implements SimulationFinisher {
     @SuppressWarnings("unused")
     private void displayTx(Block<TendermintTransaction> block) {
         for (TendermintTransaction tx : block.getTransactions()) {
-            displayLine("  T:%d, S: %s, R:%s, Amount: %d".formatted(tx.getTimestamp(), tx.getSender(), tx.getReceiver(), tx.getAmount()));
+            displayLine("  %s".formatted(tx));
         }
         displayHorizontalSeparator();
     }

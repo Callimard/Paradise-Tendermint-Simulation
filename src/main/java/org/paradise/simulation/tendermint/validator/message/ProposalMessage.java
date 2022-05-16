@@ -6,7 +6,7 @@ import lombok.NonNull;
 import org.paradise.palmbeach.blockchain.block.Block;
 import org.paradise.palmbeach.core.agent.SimpleAgent;
 import org.paradise.simulation.tendermint.validator.TendermintValidator;
-import org.paradise.simulation.tendermint.validator.TendermintTransaction;
+import org.paradise.simulation.tendermint.transaction.TendermintTransaction;
 
 @EqualsAndHashCode(callSuper = true)
 public class ProposalMessage extends TendermintValidatorMessage<Block<TendermintTransaction>> {

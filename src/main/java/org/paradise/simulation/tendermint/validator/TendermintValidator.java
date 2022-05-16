@@ -22,6 +22,7 @@ import org.paradise.simulation.tendermint.TendermintProtocol;
 import org.paradise.simulation.tendermint.client.message.TendermintClientMessage;
 import org.paradise.simulation.tendermint.client.message.TransactionMessage;
 import org.paradise.simulation.tendermint.seed.message.NodeDirectoryMessage;
+import org.paradise.simulation.tendermint.transaction.TendermintTransaction;
 import org.paradise.simulation.tendermint.validator.message.PrecommitMessage;
 import org.paradise.simulation.tendermint.validator.message.PrevoteMessage;
 import org.paradise.simulation.tendermint.validator.message.ProposalMessage;
@@ -183,7 +184,7 @@ public class TendermintValidator extends TendermintProtocol implements MessageRe
     }
 
     private boolean isValidTx(TendermintTransaction tx) {
-        return tx != null && tx.getTimestamp() > 0 && tx.getAmount() >= 1;
+        return tx.isBasicValid();
     }
 
     private void scheduleTimeoutPropose(long h, long r) {

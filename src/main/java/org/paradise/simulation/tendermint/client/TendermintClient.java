@@ -12,7 +12,8 @@ import org.paradise.palmbeach.utils.context.Context;
 import org.paradise.palmbeach.utils.validation.Validate;
 import org.paradise.simulation.tendermint.TendermintProtocol;
 import org.paradise.simulation.tendermint.client.message.TransactionMessage;
-import org.paradise.simulation.tendermint.validator.TendermintTransaction;
+import org.paradise.simulation.tendermint.transaction.TendermintTransaction;
+import org.paradise.simulation.tendermint.transaction.money.TendermintMoneyTx;
 import org.paradise.simulation.tendermint.validator.TendermintValidator;
 
 import java.util.Collections;
@@ -82,9 +83,9 @@ public class TendermintClient extends TendermintProtocol {
     private void fillConnectedValidators() {
         connectedValidators.clear();
         List<SimpleAgent.AgentIdentifier> tendermintAgents =
-                PalmBeachSimulation.allAgents().stream().map(agent -> (SimpleAgent.SimpleAgentIdentifier) agent.getIdentifier())
+                PalmBeachSimulation.allAgents().stream().map(SimpleAgent::getIdentifier)
                         .filter(identifier -> identifier.getAgentName().contains(TendermintValidator.TENDERMINT_VALIDATOR_AGENT_NAME_PREFIX))
-                        .map(identifier -> (SimpleAgent.AgentIdentifier) identifier).collect(Collectors.toList());
+                        .collect(Collectors.toList());
 
         Collections.shuffle(tendermintAgents);
 
@@ -199,8 +200,8 @@ public class TendermintClient extends TendermintProtocol {
             for (int i = 0; i < random.nextInt(minTxCreated(), maxTxCreated() + 1); i++) {
                 String sender = getAgent().getIdentifier().toString();
                 String receiver = String.valueOf(random.nextInt(5000));
-                TendermintTransaction tx = new TendermintTransaction(PalmBeachSimulation.scheduler().getCurrentTime(), sender, receiver,
-                                                                     random.nextLong(Long.MAX_VALUE));
+                TendermintTransaction tx = new TendermintMoneyTx(PalmBeachSimulation.scheduler().getCurrentTime(), sender, receiver,
+                                                                 random.nextLong(Long.MAX_VALUE), random.nextLong(1L, 10L));
                 sendToValidators(tx);
                 transactionSent.add(tx);
             }
