@@ -9,7 +9,7 @@ import org.paradise.simulation.tendermint.validator.TendermintValidator;
 import org.paradise.simulation.tendermint.validator.TendermintTransaction;
 
 @EqualsAndHashCode(callSuper = true)
-public class ProposalMessage extends TendermintMessage<Block<TendermintTransaction>> {
+public class ProposalMessage extends TendermintValidatorMessage<Block<TendermintTransaction>> {
 
     // Variables.
 

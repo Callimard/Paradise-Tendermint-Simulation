@@ -6,7 +6,7 @@ import org.paradise.palmbeach.core.agent.SimpleAgent;
 import org.paradise.simulation.tendermint.validator.TendermintValidator;
 
 @EqualsAndHashCode(callSuper = true)
-public class PrecommitMessage extends TendermintMessage<String> {
+public class PrecommitMessage extends TendermintValidatorMessage<String> {
 
     // Constructors.
 

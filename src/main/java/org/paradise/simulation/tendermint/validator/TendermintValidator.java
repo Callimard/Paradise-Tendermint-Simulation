@@ -6,7 +6,6 @@ import com.google.common.collect.Sets;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NonNull;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.paradise.palmbeach.basic.messaging.MessageReceiver;
 import org.paradise.palmbeach.basic.messaging.broadcasting.Broadcaster;
@@ -15,18 +14,18 @@ import org.paradise.palmbeach.blockchain.block.Blockchain;
 import org.paradise.palmbeach.blockchain.block.NonForkBlockchain;
 import org.paradise.palmbeach.core.agent.SimpleAgent;
 import org.paradise.palmbeach.core.agent.exception.AgentNotStartedException;
-import org.paradise.palmbeach.core.agent.protocol.Protocol;
-import org.paradise.palmbeach.core.environment.network.Network;
 import org.paradise.palmbeach.core.event.Event;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.utils.context.Context;
 import org.paradise.palmbeach.utils.validation.Validate;
-import org.paradise.simulation.tendermint.client.message.ClientTendermintMessage;
-import org.paradise.simulation.tendermint.client.message.TendermintTransactionMessage;
+import org.paradise.simulation.tendermint.TendermintProtocol;
+import org.paradise.simulation.tendermint.client.message.TendermintClientMessage;
+import org.paradise.simulation.tendermint.client.message.TransactionMessage;
+import org.paradise.simulation.tendermint.seed.message.NodeDirectoryMessage;
 import org.paradise.simulation.tendermint.validator.message.PrecommitMessage;
 import org.paradise.simulation.tendermint.validator.message.PrevoteMessage;
 import org.paradise.simulation.tendermint.validator.message.ProposalMessage;
-import org.paradise.simulation.tendermint.validator.message.TendermintMessage;
+import org.paradise.simulation.tendermint.validator.message.TendermintValidatorMessage;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -34,7 +33,7 @@ import java.util.stream.Collectors;
 import static org.paradise.palmbeach.core.simulation.PalmBeachSimulation.scheduleEvent;
 
 @Slf4j
-public class TendermintValidator extends Protocol implements MessageReceiver.MessageReceiverObserver {
+public class TendermintValidator extends TendermintProtocol implements MessageReceiver.MessageReceiverObserver {
 
     // Constants.
 
@@ -51,8 +50,6 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
     public static final int DEFAULT_MAX_BLOCK_SIZE = 50;
 
     // Variables.
-
-    private Broadcaster broadcaster;
 
     private long height = 1L;
     private long round = 0L;
@@ -84,9 +81,6 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
     private final Set<TendermintTransaction> setMemoryPool;
 
     private final Set<TendermintTransaction> polledTx;
-
-    @Setter
-    private Network network;
 
     private final Set<SimpleAgent.AgentIdentifier> groupMembership;
 
@@ -124,8 +118,8 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
     }
 
     private void startRound(long r) {
-        if (height == maxHeight()) {
-            log.debug("{} STOPPED -> height >= 15 reached", getAgent().getIdentifier());
+        if (height == maxHeight() + 1) {
+            log.debug("{} STOPPED -> height >= {} reached", getAgent().getIdentifier(), maxHeight() + 1);
             getAgent().stop();
         }
 
@@ -239,7 +233,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
                 treatsPrevoteMessage(preMsg);
             } else if (contentDelivered instanceof PrecommitMessage preComMsg) {
                 treatsPrecommitMessage(preComMsg);
-            } else if (contentDelivered instanceof ClientTendermintMessage<?> clientMessage) {
+            } else if (contentDelivered instanceof TendermintClientMessage<?> clientMessage) {
                 treatClientTendermintMessage(clientMessage);
             } else {
                 log.error("Agent {} in Tendermint receive a object which is not a TendermintMessage -> Object receive {}",
@@ -276,18 +270,18 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
     }
 
-    private void treatClientTendermintMessage(ClientTendermintMessage<?> clientMessage) {
-        if (clientMessage instanceof TendermintTransactionMessage txMessage) {
+    private void treatClientTendermintMessage(TendermintClientMessage<?> clientMessage) {
+        if (clientMessage instanceof TransactionMessage txMessage) {
             TendermintTransaction tx = txMessage.getContent();
             if (!setMemoryPool.contains(tx)) {
                 memoryPool.offer(tx);
                 setMemoryPool.add(tx);
-                broadcaster.broadcastMessage(txMessage, groupMembership(), network);
+                getBroadcaster().broadcastMessage(txMessage, groupMembership(), getNetwork());
             }
         }
     }
 
-    private void executeRules(TendermintMessage<?> tMsg) {
+    private void executeRules(TendermintValidatorMessage<?> tMsg) {
         for (Rule rule : rules) {
             if (!rule.isOnlyOneTimeRule()) {
                 rule.execute(tMsg);
@@ -304,20 +298,21 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
     }
 
     private void broadcastProposal(long h, long r, Block<TendermintTransaction> proposal, long vR) {
-        broadcaster.broadcastMessage(new ProposalMessage(getAgent().getIdentifier(), h, r, proposal, vR), groupMembership(), network);
+        getBroadcaster().broadcastMessage(new ProposalMessage(getAgent().getIdentifier(), h, r, proposal, vR), groupMembership(), getNetwork());
     }
 
     private void broadcastPrevote(long h, long r, String value) {
-        broadcaster.broadcastMessage(new PrevoteMessage(getAgent().getIdentifier(), h, r, value), groupMembership(), network);
+        getBroadcaster().broadcastMessage(new PrevoteMessage(getAgent().getIdentifier(), h, r, value), groupMembership(), getNetwork());
     }
 
     private void broadcastPrecommit(long h, long r, String value) {
-        broadcaster.broadcastMessage(new PrecommitMessage(getAgent().getIdentifier(), h, r, value), groupMembership(), network);
+        getBroadcaster().broadcastMessage(new PrecommitMessage(getAgent().getIdentifier(), h, r, value), groupMembership(), getNetwork());
     }
 
     @Override
     public boolean interestedBy(Object contentDelivered) {
-        return contentDelivered instanceof TendermintMessage || contentDelivered instanceof ClientTendermintMessage;
+        return contentDelivered instanceof TendermintValidatorMessage || contentDelivered instanceof TendermintClientMessage ||
+                contentDelivered instanceof NodeDirectoryMessage;
     }
 
     private boolean isValid(Block<TendermintTransaction> block, long h) {
@@ -327,14 +322,15 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
     // Getters and Setters.
 
     @SuppressWarnings("unused")
+    @Override
     public void setBroadcaster(Broadcaster broadcaster) {
-        this.broadcaster = broadcaster;
-        this.broadcaster.addObserver(this);
+        super.setBroadcaster(broadcaster);
+        getBroadcaster().addObserver(this);
     }
 
     public Set<SimpleAgent.AgentIdentifier> groupMembership() {
         if (groupMembership.isEmpty()) {
-            Set<SimpleAgent.AgentIdentifier> tendermintAgents = network.getEnvironment().evolvingAgents().stream()
+            Set<SimpleAgent.AgentIdentifier> tendermintAgents = getNetwork().getEnvironment().evolvingAgents().stream()
                     .filter(agent -> PalmBeachSimulation.getAgent(agent).getProtocol(TendermintValidator.class) != null)
                     .collect(Collectors.toSet());
             groupMembership.addAll(tendermintAgents);
@@ -383,15 +379,15 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
 
         // Methods.
 
-        public abstract boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg);
+        public abstract boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg);
 
-        public final void execute(@NonNull TendermintMessage<?> tMsg) {
+        public final void execute(@NonNull TendermintValidatorMessage<?> tMsg) {
             if (evaluateCondition(tMsg)) {
                 execution(tMsg);
             }
         }
 
-        protected abstract void execution(@NonNull TendermintMessage<?> tMsg);
+        protected abstract void execution(@NonNull TendermintValidatorMessage<?> tMsg);
 
         public abstract boolean isOnlyOneTimeRule();
 
@@ -457,7 +453,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             if (tMsg instanceof ProposalMessage proMsg) {
                 final long h = proMsg.getHeight();
                 final long r = proMsg.getRound();
@@ -473,7 +469,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             if (tMsg instanceof ProposalMessage proMsg) {
                 final Block<TendermintTransaction> v = proMsg.getValue();
                 log.debug("{} Execute ProposalForRound -> v {}, h {}, lockRound {}, lockedValue == v {}, isValid(v, height) {}",
@@ -500,7 +496,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             if (tMsg instanceof PrevoteMessage preMsg) {
                 return height == preMsg.getHeight()
                         && round == preMsg.getRound()
@@ -511,7 +507,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             scheduleTimeoutPrevote(height, round);
         }
 
@@ -531,7 +527,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             if (tMsg instanceof PrevoteMessage preMsg) {
                 final long h = preMsg.getHeight();
                 final long r = preMsg.getRound();
@@ -548,7 +544,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             broadcastPrecommit(height, round, null);
             step = Step.PRECOMMIT;
         }
@@ -564,7 +560,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             if (tMsg instanceof PrecommitMessage preCoMsg) {
                 boolean evaluation = height == preCoMsg.getHeight()
                         && round == preCoMsg.getRound()
@@ -578,7 +574,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             log.debug("{} scheduleTimeoutPrecommit Stag({}, {})", getAgent().getIdentifier(), height, round);
             scheduleTimeoutPrecommit(height, round);
         }
@@ -598,14 +594,14 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             return height == tMsg.getHeight()
                     && round < tMsg.getRound()
                     && numberMessageFor(height, tMsg.getRound()) >= (f() + 1);
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             startRound(tMsg.getRound());
         }
 
@@ -620,7 +616,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             Proposal proposal;
             Prevote prevote;
 
@@ -647,7 +643,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             Proposal proposal = findProposal(height, round);
             final Block<TendermintTransaction> v = proposal.proposal();
             final long vR = proposal.vR();
@@ -671,7 +667,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             Proposal proposal;
             Prevote prevote;
 
@@ -704,7 +700,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             final Block<TendermintTransaction> v = findProposal(height, round).proposal();
 
             log.debug("{} receive 2f + 1 Prevote of v = {}", getAgent().getIdentifier(), v.sha256Base64Hash());
@@ -731,7 +727,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         // Methods.
 
         @Override
-        public boolean evaluateCondition(@NonNull TendermintMessage<?> tMsg) {
+        public boolean evaluateCondition(@NonNull TendermintValidatorMessage<?> tMsg) {
             Proposal proposal;
             Precommit precommit;
 
@@ -754,7 +750,7 @@ public class TendermintValidator extends Protocol implements MessageReceiver.Mes
         }
 
         @Override
-        protected void execution(@NonNull TendermintMessage<?> tMsg) {
+        protected void execution(@NonNull TendermintValidatorMessage<?> tMsg) {
             final Block<TendermintTransaction> v = findProposal(height, tMsg.getRound()).proposal();
 
             if (isValid(v, height)) {

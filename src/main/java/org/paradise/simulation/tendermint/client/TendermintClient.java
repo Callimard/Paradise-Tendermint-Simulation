@@ -3,20 +3,17 @@ package org.paradise.simulation.tendermint.client;
 import com.google.common.collect.Sets;
 import lombok.Getter;
 import lombok.NonNull;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.paradise.palmbeach.basic.messaging.broadcasting.Broadcaster;
 import org.paradise.palmbeach.core.agent.SimpleAgent;
-import org.paradise.palmbeach.core.agent.protocol.Protocol;
-import org.paradise.palmbeach.core.environment.network.Network;
 import org.paradise.palmbeach.core.event.Event;
 import org.paradise.palmbeach.core.scheduler.executor.Executable;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.utils.context.Context;
 import org.paradise.palmbeach.utils.validation.Validate;
-import org.paradise.simulation.tendermint.client.message.TendermintTransactionMessage;
-import org.paradise.simulation.tendermint.validator.TendermintValidator;
+import org.paradise.simulation.tendermint.TendermintProtocol;
+import org.paradise.simulation.tendermint.client.message.TransactionMessage;
 import org.paradise.simulation.tendermint.validator.TendermintTransaction;
+import org.paradise.simulation.tendermint.validator.TendermintValidator;
 
 import java.util.Collections;
 import java.util.List;
@@ -25,7 +22,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
-public class TendermintClient extends Protocol {
+public class TendermintClient extends TendermintProtocol {
 
     // Constants.
 
@@ -59,12 +56,6 @@ public class TendermintClient extends Protocol {
 
     private int sendingCounter = 0;
 
-    @Setter
-    private Broadcaster broadcaster;
-
-    @Setter
-    private Network network;
-
     @Getter
     private final Set<TendermintTransaction> transactionSent;
 
@@ -77,11 +68,6 @@ public class TendermintClient extends Protocol {
     }
 
     // Methods.
-
-    @Override
-    protected ProtocolManipulator defaultProtocolManipulator() {
-        return new DefaultProtocolManipulator(this);
-    }
 
     @Override
     public void agentStarted() {
@@ -197,9 +183,9 @@ public class TendermintClient extends Protocol {
         @Override
         public void execute() {
             if (sendingCounter < nbSendingTx()) {
+                sendingCounter++;
                 sendTx();
                 scheduleNextSending();
-                sendingCounter++;
             }
         }
 
@@ -221,7 +207,7 @@ public class TendermintClient extends Protocol {
         }
 
         private void sendToValidators(TendermintTransaction tx) {
-            broadcaster.broadcastMessage(new TendermintTransactionMessage(tx), connectedValidators, network);
+            getBroadcaster().broadcastMessage(new TransactionMessage(tx), connectedValidators, getNetwork());
         }
     }
 }
