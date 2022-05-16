@@ -2,11 +2,11 @@ package org.paradise.simulation.tendermint.client.message;
 
 import org.paradise.simulation.tendermint.validator.TendermintTransaction;
 
-public class TendermintTransactionMessage extends ClientTendermintMessage<TendermintTransaction> {
+public class TransactionMessage extends TendermintClientMessage<TendermintTransaction> {
 
     // Constructors.
 
-    public TendermintTransactionMessage(TendermintTransaction value) {
+    public TransactionMessage(TendermintTransaction value) {
         super(value);
     }
 }

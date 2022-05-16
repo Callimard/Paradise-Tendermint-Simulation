@@ -68,8 +68,9 @@ release-deploy:
       - "**/*.jar"
   only:
     variables:
-      - $CI_COMMIT_TAG =~ /^(release\/).*/
+      - $CI_COMMIT_TAG =~ /^(release\/)[0-9]+((\.|-)[0-9]+)*/
   script:
+    - mvn versions:set -DnewVersion=$(cut -d / -f 2 <<< $CI_COMMIT_TAG) -DautoVersionSubmodules=true
     - mvn $MAVEN_CLI_OPTS -Dmaven.test.skip=true clean deploy -Dmaven.deploy.skip=snapshots
 
 snapshot-deploy:
@@ -80,6 +81,7 @@ snapshot-deploy:
       - "**/*.jar"
   only:
     variables:
-      - $CI_COMMIT_TAG =~ /^(snapshot\/).*/
+      - $CI_COMMIT_TAG =~ /^(snapshot\/)[0-9]+((\.|-)[0-9]+)*/
   script:
+    - mvn versions:set -DnewVersion=$(cut -d / -f 2 <<< $CI_COMMIT_TAG)-SNAPSHOT -DautoVersionSubmodules=true
     - mvn $MAVEN_CLI_OPTS -Dmaven.test.skip=true clean deploy -Dmaven.deploy.skip=releases
