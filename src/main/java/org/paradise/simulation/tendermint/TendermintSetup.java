@@ -57,7 +57,7 @@ public class TendermintSetup implements SimulationSetup {
     private Set<SimpleAgent.AgentIdentifier> rootSeedNodes() {
         Set<SimpleAgent.AgentIdentifier> rootSeedNodes = Sets.newHashSet();
         for (SimpleAgent agent : PalmBeachSimulation.allAgents()) {
-            SimpleAgent.SimpleAgentIdentifier identifier = (SimpleAgent.SimpleAgentIdentifier) agent.getIdentifier();
+            SimpleAgent.AgentIdentifier identifier = agent.getIdentifier();
             if (identifier.getAgentName().contains(ROOT_SEED_NODE_PREFIX)) {
                 rootSeedNodes.add(identifier);
             }
@@ -67,7 +67,6 @@ public class TendermintSetup implements SimulationSetup {
     }
 
     private boolean isUnknownSeedNode(SimpleAgent.AgentIdentifier agent) {
-        SimpleAgent.SimpleAgentIdentifier identifier = (SimpleAgent.SimpleAgentIdentifier) agent;
-        return identifier.getAgentName().contains(UNKNOWN_SEED_NODE_PREFIX);
+        return agent.getAgentName().contains(UNKNOWN_SEED_NODE_PREFIX);
     }
 }
