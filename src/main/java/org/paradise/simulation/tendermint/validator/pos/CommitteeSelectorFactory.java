@@ -8,7 +8,7 @@ public class CommitteeSelectorFactory {
 
     // Methods.
 
-    private CommitteeSelector basicCommitteeSelector() {
+    public static CommitteeSelector basicCommitteeSelector() {
         return SimpleCommitteeSelector.instance();
     }
 

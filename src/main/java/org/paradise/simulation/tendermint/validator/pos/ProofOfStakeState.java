@@ -27,6 +27,11 @@ public class ProofOfStakeState {
 
     // Methods.
 
+    public void clear() {
+        nodes.clear();
+        totalWeight = 0L;
+    }
+
     /**
      * Map the specified address to the initial weight. If the address is already use, the old weight is replaced by the specified initial weight.
      *
