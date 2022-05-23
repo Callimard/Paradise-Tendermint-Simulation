@@ -170,8 +170,7 @@ public class TendermintValidator extends TendermintProtocol implements MessageRe
     private void startRound(long r) {
         if (height() == maxHeight() + 1) {
             log.debug("{} STOPPED -> height()>= {} reached", getAgent().getIdentifier(), maxHeight() + 1);
-            if (!PalmBeachSimulation.isEnded())
-                PalmBeachSimulation.scheduler().kill();
+            getAgent().stop();
         }
 
         if (getAgent().isStarted()) {
@@ -252,8 +251,55 @@ public class TendermintValidator extends TendermintProtocol implements MessageRe
 
     @Override
     public void agentStarted() {
+        nextHeight();
+    }
+
+    private void nextHeight() {
+        log.info("{} pass to next height {}", getAgent().getIdentifier(), height());
+        mapHeightRound.put(height(), round);
+
+        clearUselessProposal();
+        clearUselessPrevote();
+        clearUselessPrecommit();
+
+        polledTx.clear();
+        resetTendermint();
         computeCurrentCommittee();
         startRound(0L);
+    }
+
+    private void clearUselessProposal() {
+        proposalReceived.removeIf(proposal -> proposal.h <= height());
+    }
+
+    private void clearUselessPrevote() {
+        prevoteReceived.entrySet().removeIf(entry -> {
+            Stage stage = entry.getKey();
+            return stage.h() <= height();
+        });
+        prevoteCounter.entrySet().removeIf(entry -> {
+            Prevote prevote = entry.getKey();
+            return prevote.h() <= height();
+        });
+    }
+
+    private void clearUselessPrecommit() {
+        precommitReceived.entrySet().removeIf(entry -> {
+            Stage stage = entry.getKey();
+            return stage.h() <= height();
+        });
+        precommitCounter.entrySet().removeIf(entry -> {
+            Precommit prevote = entry.getKey();
+            return prevote.h() <= height();
+        });
+    }
+
+    private void resetTendermint() {
+        lockRound = -1;
+        lockedValue = null;
+        validRound = -1;
+        validValue = null;
+        initTimeout();
     }
 
     private void computeCurrentCommittee() {
@@ -261,6 +307,7 @@ public class TendermintValidator extends TendermintProtocol implements MessageRe
         RandomGenerator rGenerator = new Random(seed);
         CommitteeSelector cSelector = CommitteeSelectorFactory.basicCommitteeSelector();
         currentCommittee = cSelector.selectCommittee(posState, committeeSize(), rGenerator);
+        log.info("{} Committee for height {} => {}", getAgent().getIdentifier(), height(), currentCommittee);
         updateGroupMembership();
     }
 
@@ -272,6 +319,7 @@ public class TendermintValidator extends TendermintProtocol implements MessageRe
                 groupMembership.add(agent.getIdentifier());
             }
         }
+        log.info("{} GroupMemberShip for height {} => {}", getAgent().getIdentifier(), height(), groupMembership);
     }
 
     @Override
@@ -839,6 +887,7 @@ public class TendermintValidator extends TendermintProtocol implements MessageRe
         private void addBlock(Block<TendermintTransaction> v) {
             // TODO Broadcast to other validators which are not in the committee.
             decision.addBlock(v);
+            log.info("{} add new block {} {}", getAgent().getIdentifier(), v.getHeight(), v.sha256Base64Hash());
             updatePoSState(v);
             Set<TendermintTransaction> blockTransactions = v.getTransactions();
             reAddPolledTx(blockTransactions);
@@ -859,53 +908,6 @@ public class TendermintValidator extends TendermintProtocol implements MessageRe
                 setMemoryPool.remove(tx);
                 memoryPool.remove(tx);
             }
-        }
-
-        private void nextHeight() {
-            mapHeightRound.put(height(), round);
-
-            clearUselessProposal();
-            clearUselessPrevote();
-            clearUselessPrecommit();
-
-            polledTx.clear();
-            resetTendermint();
-            computeCurrentCommittee();
-            startRound(0);
-        }
-
-        private void clearUselessProposal() {
-            proposalReceived.removeIf(proposal -> proposal.h <= height());
-        }
-
-        private void clearUselessPrevote() {
-            prevoteReceived.entrySet().removeIf(entry -> {
-                Stage stage = entry.getKey();
-                return stage.h() <= height();
-            });
-            prevoteCounter.entrySet().removeIf(entry -> {
-                Prevote prevote = entry.getKey();
-                return prevote.h() <= height();
-            });
-        }
-
-        private void clearUselessPrecommit() {
-            precommitReceived.entrySet().removeIf(entry -> {
-                Stage stage = entry.getKey();
-                return stage.h() <= height();
-            });
-            precommitCounter.entrySet().removeIf(entry -> {
-                Precommit prevote = entry.getKey();
-                return prevote.h() <= height();
-            });
-        }
-
-        private void resetTendermint() {
-            lockRound = -1;
-            lockedValue = null;
-            validRound = -1;
-            validValue = null;
-            initTimeout();
         }
 
         @Override

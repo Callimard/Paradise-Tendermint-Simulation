@@ -32,6 +32,8 @@ public class TendermintSetup implements SimulationSetup {
 
     private static final Random R = new Random();
 
+    private static Blockchain<TendermintTransaction> initialBlockchain;
+
     @Override
     public void setupSimulation() {
         log.info("Start all agents");
@@ -43,8 +45,11 @@ public class TendermintSetup implements SimulationSetup {
                 .stream().filter(this::isValidator)
                 .map(agent -> agent.getProtocol(TendermintValidator.class))
                 .collect(Collectors.toSet());
+        log.info("Validators size = {}", validators.size());
         BlockchainInitiator blockchainInitiator = new BlockchainInitiator();
         Blockchain<TendermintTransaction> initialBC = blockchainInitiator.generateBlockchain(validators);
+        log.info("Initial BC size = {}", initialBC.currentHeight());
+        initialBlockchain = initialBC;
 
         for (SimpleAgent agent : PalmBeachSimulation.allAgents()) {
             setupTendermintValidatorProtocol(network, rootSeedNodes, agent, initialBC);
@@ -65,7 +70,7 @@ public class TendermintSetup implements SimulationSetup {
         if (validator != null) {
             validator.setNetwork(network);
             validator.getSeedNodes().addAll(rootSeedNodes);
-            validator.setDecision(initialBC);
+            validator.setDecision(initialBC.copy());
             validator.reComputePoSState();
         }
     }
@@ -104,6 +109,10 @@ public class TendermintSetup implements SimulationSetup {
 
     private boolean isUnknownSeedNode(SimpleAgent.AgentIdentifier agent) {
         return agent.getAgentName().contains(UNKNOWN_SEED_NODE_PREFIX);
+    }
+
+    public static Blockchain<TendermintTransaction> getInitialBlockchain() {
+        return initialBlockchain;
     }
 
     // Inner classes.
@@ -194,7 +203,7 @@ public class TendermintSetup implements SimulationSetup {
         }
 
         private TendermintValidator randomSelection(List<TendermintValidator> l, TendermintValidator except) {
-            TendermintValidator selected = null;
+            TendermintValidator selected;
             do {
                 int index = R.nextInt(0, l.size());
                 selected = l.get(index);

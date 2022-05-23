@@ -44,23 +44,19 @@ public class SimpleCommitteeSelector implements CommitteeSelector {
         for (int c = 0; c < committeeSize; c++) {
             long totalAccumulation = accumulator(accumulatorSet, intervalArray.length);
             long rGenerated = randomGenerator.nextLong(1, (totalWeight - totalAccumulation) + 1);
-            Interval prev = null;
             for (int j = 0; j < intervalArray.length; j++) {
                 Interval interval = intervalArray[j];
                 boolean alreadyRemoved = removedInterval.contains(interval);
 
                 long accumulator = accumulator(accumulatorSet, j);
                 long min = interval.min - accumulator;
+                long max = interval.max - accumulator;
 
-                if (prev != null && !alreadyRemoved && min > rGenerated) {
-                    removedInterval.add(prev);
-                    accumulatorSet.add(new IndexWeight(j, prev.associatedNode().weight()));
-                    committee.add(prev.associatedNode().address());
+                if (!alreadyRemoved && min <= rGenerated && rGenerated <= max) {
+                    removedInterval.add(interval);
+                    accumulatorSet.add(new IndexWeight(j, interval.associatedNode().weight()));
+                    committee.add(interval.associatedNode().address());
                     break;
-                }
-
-                if (!alreadyRemoved) {
-                    prev = interval;
                 }
             }
         }
@@ -82,7 +78,11 @@ public class SimpleCommitteeSelector implements CommitteeSelector {
 
     // Inner classes.
 
-    private static record Interval(ProofOfStakeState.Node associatedNode, long min, long max) {
+    private static record Interval(ProofOfStakeState.Node associatedNode, long min, long max) implements Comparable<Interval> {
+        @Override
+        public int compareTo(Interval o) {
+            return Long.compare(min, o.min);
+        }
     }
 
     private static record IndexWeight(long index, long weight) implements Comparable<IndexWeight> {

@@ -4,6 +4,7 @@ import com.google.common.primitives.Longs;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NonNull;
+import org.paradise.palmbeach.blockchain.transaction.Transaction;
 
 import static org.apache.commons.codec.binary.Base64.encodeBase64String;
 import static org.apache.commons.codec.digest.DigestUtils.sha256;
@@ -28,6 +29,11 @@ public class TendermintLockStakeTx extends TendermintAmountTx {
     }
 
     // Methods.
+
+    @Override
+    public Transaction copy() {
+        return new TendermintLockStakeTx(getTimestamp(), getSender(), getAmount(), getMinTime());
+    }
 
     @Override
     public String sha256Base64Hash() {

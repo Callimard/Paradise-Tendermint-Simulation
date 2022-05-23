@@ -9,8 +9,8 @@ import org.paradise.palmbeach.core.agent.SimpleAgent;
 import org.paradise.palmbeach.core.simulation.PalmBeachSimulation;
 import org.paradise.palmbeach.core.simulation.SimulationFinisher;
 import org.paradise.simulation.tendermint.client.TendermintClient;
-import org.paradise.simulation.tendermint.validator.TendermintValidator;
 import org.paradise.simulation.tendermint.transaction.TendermintTransaction;
+import org.paradise.simulation.tendermint.validator.TendermintValidator;
 
 import java.util.Collections;
 import java.util.List;
@@ -33,7 +33,7 @@ public class TendermintFinisher implements SimulationFinisher {
         displayBlockchainVerification();
         displayBlockchainData();
         displayTransactionVerification();
-        displayVerifyDoublonInBC();
+        displayVerifyDoublonInBC(TendermintSetup.getInitialBlockchain().currentHeight() + 1L);
         displayBlockFill();
     }
 
@@ -320,7 +320,7 @@ public class TendermintFinisher implements SimulationFinisher {
         return allTransactionSent;
     }
 
-    private void displayVerifyDoublonInBC() {
+    private void displayVerifyDoublonInBC(long begin) {
         displayLogTitle("Doublon verification");
 
         List<SimpleAgent> agents = PalmBeachSimulation.allAgents();
@@ -332,12 +332,14 @@ public class TendermintFinisher implements SimulationFinisher {
         long totalTxInBc = 0L;
 
         for (Block<TendermintTransaction> block : bc) {
-            for (TendermintTransaction tx : block.getTransactions()) {
-                if (!allTx.add(tx)) {
-                    nbDoublon++;
+            if (block.getHeight() >= begin) {
+                for (TendermintTransaction tx : block.getTransactions()) {
+                    if (!allTx.add(tx)) {
+                        nbDoublon++;
+                    }
                 }
+                totalTxInBc += block.getTransactions().size();
             }
-            totalTxInBc += block.getTransactions().size();
         }
 
         log.info("Nb doublon = {}", nbDoublon);

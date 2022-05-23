@@ -20,7 +20,7 @@ public class SimpleCommitteeSelectorTest {
 
     // Constants.
 
-    private static final int NB_NODE = 300;
+    private static final int NB_NODE = 75;
     private static final int COMMITTEE_SIZE = 15;
 
     // Tests.
@@ -29,6 +29,16 @@ public class SimpleCommitteeSelectorTest {
     @DisplayName("SimpleCommitteeSelector selectCommittee()")
     @Tag("selectCommittee")
     class SelectCommittee {
+
+        @Test
+        @DisplayName("selectCommittee() returns all agents if committee size is same as agents set")
+        void committeeSizeEqualsToAgentSet() {
+            ProofOfStakeState posState = generatePoSState();
+            SimpleCommitteeSelector cSelector = SimpleCommitteeSelector.instance();
+            RandomGenerator randomGenerator = new Random();
+
+            assertThat(cSelector.selectCommittee(posState, NB_NODE, randomGenerator)).isNotNull().hasSize(NB_NODE);
+        }
 
         @Test
         @DisplayName("selectCommittee() creates a committee with the specified size")
